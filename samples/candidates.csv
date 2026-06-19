@@ -1,0 +1,4 @@
+name,email,years,skills,summary,location
+Alice Tan,alice.tan.demo@example.com,7,"TypeScript, Node.js, PostgreSQL, AWS, GraphQL","Senior backend engineer who has shipped large multi-tenant SaaS platforms.",Singapore
+Brian Cho,brian.cho.demo@example.com,4,"Python, Django, Postgres, Docker, Kubernetes","Backend engineer with strong fintech background and infra chops.",Seoul
+Carla Mendes,carla.mendes.demo@example.com,9,"Go, gRPC, AWS, Postgres, Kafka, Terraform","Staff engineer; led the migration of a monolith to event-driven microservices.",Lisbon

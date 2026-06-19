@@ -1,0 +1,53 @@
+{
+  "name": "talent-scout",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "worker": "tsx worker/src/index.ts",
+    "worker:dev": "tsx --env-file=.env.local worker/src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "adm-zip": "^0.5.16",
+    "imapflow": "^1.0.171",
+    "lucide-react": "^0.460.0",
+    "luxon": "^3.7.2",
+    "mailparser": "^3.7.1",
+    "motion": "^12.38.0",
+    "next": "^15.1.0",
+    "nodemailer": "^6.9.16",
+    "openai": "^4.73.0",
+    "papaparse": "^5.4.1",
+    "pdf-parse": "^1.1.1",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.6",
+    "@types/luxon": "^3.7.1",
+    "@types/mailparser": "^3.4.5",
+    "@types/node": "^22.9.0",
+    "@types/nodemailer": "^6.4.16",
+    "@types/papaparse": "^5.3.15",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
