@@ -3,6 +3,11 @@ import { isAnalyticsUnlocked } from "@/lib/analytics-unlock";
 import { supabaseServer } from "@/lib/db";
 import { estimateLlmCostUsd } from "@/lib/llm-pricing";
 import { getInviteAnalyticsAggregate } from "@/lib/invite";
+import {
+  getCohortAnalysis,
+  getSourceAttribution,
+  getTimeToHireTrend,
+} from "@/lib/analytics-enhancements";
 
 export const runtime = "nodejs";
 
@@ -64,7 +69,7 @@ export async function GET(req: NextRequest) {
     .from("scheduled_interviews")
     .select("id, confirmed_at, starts_at, prep_packet_sent_at, candidate_rescheduled_count, session_id");
 
-  const [matchRes, queueRes, convoRes, jobsRes, usageRes, inviteRes, schedulingRes, confirmedRes] =
+  const [matchRes, queueRes, convoRes, jobsRes, usageRes, inviteRes, schedulingRes, confirmedRes, cohortRes, sourceRes, tthRes] =
     await Promise.all([
       matchQuery,
       sb.from("outreach_queue").select("status, action"),
@@ -77,6 +82,9 @@ export async function GET(req: NextRequest) {
       getInviteAnalyticsAggregate(jobId ?? undefined),
       schedulingSessionQuery,
       confirmedInterviewQuery,
+      jobId ? getCohortAnalysis(jobId).catch(() => []) : Promise.resolve([]),
+      jobId ? getSourceAttribution(jobId).catch(() => []) : Promise.resolve([]),
+      jobId ? getTimeToHireTrend(jobId).catch(() => []) : Promise.resolve([]),
     ]);
 
   if (matchRes.error) {
@@ -273,6 +281,18 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Time-to-hire summary stats
+  const hiredItems = (tthRes as Awaited<ReturnType<typeof getTimeToHireTrend>>).filter(
+    (t) => t.status === "hired" && t.daysToHire != null,
+  );
+  const hiredDays = hiredItems.map((t) => t.daysToHire as number).sort((a, b) => a - b);
+  const medianTimeToHire =
+    hiredDays.length > 0 ? hiredDays[Math.floor(hiredDays.length / 2)] : null;
+  const avgTimeToHire =
+    hiredDays.length > 0
+      ? Math.round(hiredDays.reduce((a, b) => a + b, 0) / hiredDays.length)
+      : null;
+
   return NextResponse.json({
     scope: jobId ? "job" : "global",
     jobId,
@@ -283,6 +303,15 @@ export async function GET(req: NextRequest) {
       avgTimeToConfirmHours,
       prepPacketsSent,
       totalRescheduled,
+    },
+    // Enhanced analytics (only populated when jobId is provided)
+    cohorts: cohortRes,
+    sourceAttribution: sourceRes,
+    timeToHire: {
+      data: tthRes,
+      medianDays: medianTimeToHire,
+      averageDays: avgTimeToHire,
+      hiredCount: hiredItems.length,
     },
     totals: {
       matches: matches.length,

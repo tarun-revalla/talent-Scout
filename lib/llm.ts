@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
+import { z } from "zod";
 import { env } from "./env";
 import {
   buildFollowupEmailSystemPrompt,
@@ -786,4 +787,103 @@ export function jdEmbeddingText(jd: ParsedJD): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+// Schema for adaptive follow-up questions output
+const AdaptiveFollowUpSchema = z.object({
+  questions: z.array(z.string()).max(3),
+  reasoning: z.string(),
+});
+type AdaptiveFollowUp = z.infer<typeof AdaptiveFollowUpSchema>;
+
+/**
+ * Analyzes the cumulative transcript to determine what key screening info is
+ * still missing and generates targeted follow-up questions for each gap.
+ *
+ * Returns at most 3 focused questions (e.g. "When could you start?", "What
+ * salary range are you targeting?") rather than re-asking generic questions
+ * the candidate has already answered.
+ */
+export async function generateAdaptiveFollowUpQuestions(args: {
+  jd: ParsedJD;
+  transcript: { direction: "out" | "in"; body: string }[];
+  /** Commitments extracted from the latest analyzeReply pass. */
+  knownCommitments: {
+    availability: string | null;
+    notice_period_weeks: number | null;
+    salary_expectation: string | null;
+    willing_to_interview: string | null;
+  };
+  /** Already-listed ambiguities from analyzeReply. */
+  existingAmbiguities: string[];
+  usage?: LlmUsageContext;
+}): Promise<string[]> {
+  // Build a list of what we already know vs. what is still missing
+  const missing: string[] = [];
+  if (!args.knownCommitments.notice_period_weeks && !args.knownCommitments.availability) {
+    missing.push("start date / notice period");
+  }
+  if (!args.knownCommitments.salary_expectation) {
+    missing.push("compensation expectations");
+  }
+  if (!args.knownCommitments.willing_to_interview) {
+    missing.push("interview availability");
+  }
+
+  // If analyzeReply already surfaced these as ambiguities, that's enough —
+  // we only call the LLM when there's something richer to probe (e.g. a
+  // project the candidate mentioned that deserves a follow-up probe).
+  const hasRichContext = args.transcript.filter((t) => t.direction === "in").length >= 1;
+  if (!hasRichContext || (missing.length === 0 && args.existingAmbiguities.length === 0)) {
+    return args.existingAmbiguities.slice(0, 3);
+  }
+
+  const trimmed = args.transcript.slice(-8).map((t) => ({
+    direction: t.direction,
+    body: t.body.slice(0, 2000),
+  }));
+
+  try {
+    const r = await client().beta.chat.completions.parse({
+      model: MODELS.fast,
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a smart recruiting assistant. Given a recruiter ↔ candidate email thread, " +
+            "generate 1-3 targeted follow-up questions that are SPECIFIC to what this candidate wrote. " +
+            "Rules:\n" +
+            "1. Do NOT ask about things already answered in the transcript (see known_commitments).\n" +
+            "2. Prioritize salary, start date, and interview willingness if still missing.\n" +
+            "3. If the candidate mentioned a project, technology, or accomplishment that is directly " +
+            "relevant to the job, include ONE targeted probe (e.g. 'You mentioned your work on X — " +
+            "could you tell us more about the scale you were operating at?').\n" +
+            "4. Keep each question to one sentence. Plain language, no jargon.\n" +
+            "5. Return at most 3 questions total.\n" +
+            "6. In reasoning, briefly explain why each question was chosen.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            jd_title: args.jd.title,
+            jd_must_haves: args.jd.must_have_skills.slice(0, 6),
+            jd_salary: args.jd.salary_range,
+            known_commitments: args.knownCommitments,
+            still_missing: missing,
+            existing_ambiguities: args.existingAmbiguities,
+            transcript: trimmed,
+          }),
+        },
+      ],
+      response_format: zodResponseFormat(AdaptiveFollowUpSchema, "followup"),
+    });
+    const parsed = r.choices[0]?.message.parsed;
+    if (!parsed || parsed.questions.length === 0) return args.existingAmbiguities.slice(0, 3);
+    recordLlmUsage(args.usage ?? { operation: "adaptive_followup" }, MODELS.fast, r.usage);
+    return parsed.questions;
+  } catch {
+    // Fall back to the raw ambiguities from analyzeReply so the outreach loop continues.
+    return args.existingAmbiguities.slice(0, 3);
+  }
 }

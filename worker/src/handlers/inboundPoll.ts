@@ -1,6 +1,6 @@
 import { supabaseServer } from "@/lib/db";
 import { extractEmailAddress, fetchUnseenInbound, stripQuoted } from "@/lib/imap";
-import { analyzeReply } from "@/lib/llm";
+import { analyzeReply, generateAdaptiveFollowUpQuestions } from "@/lib/llm";
 import { enqueueIfAbsent } from "@/lib/queue";
 import { env } from "@/lib/env";
 import {
@@ -197,8 +197,37 @@ export async function inboundPoll(): Promise<void> {
     const max = env.maxOutreachRounds();
     const hasOpenQuestions = analysis.candidate_questions.length > 0;
     if (analysis.decision === "follow_up" && (rounds < max || hasOpenQuestions)) {
+      // Generate adaptive, context-aware follow-up questions instead of passing
+      // raw ambiguities. Falls back to analyzeReply ambiguities on error.
+      let followUpQuestions: string[];
+      try {
+        followUpQuestions = await generateAdaptiveFollowUpQuestions({
+          jd,
+          transcript: fullTranscript,
+          knownCommitments: {
+            availability: analysis.commitments.availability ?? null,
+            notice_period_weeks: analysis.commitments.notice_period_weeks ?? null,
+            salary_expectation: analysis.commitments.salary_expectation ?? null,
+            willing_to_interview: analysis.commitments.willing_to_interview ?? null,
+          },
+          existingAmbiguities: analysis.ambiguities,
+          usage: {
+            jobId: matchRow.job_id as string,
+            matchId,
+            operation: "adaptive_followup",
+          },
+        });
+      } catch {
+        followUpQuestions = analysis.ambiguities;
+      }
+
+      log.info(
+        { matchId, adaptiveQuestions: followUpQuestions.length, originalAmbiguities: analysis.ambiguities.length },
+        "inbound: adaptive follow-up questions generated",
+      );
+
       await enqueueIfAbsent(matchId, "send_followup", {
-        ambiguities: analysis.ambiguities,
+        ambiguities: followUpQuestions,
         candidate_questions: analysis.candidate_questions,
       });
     } else {

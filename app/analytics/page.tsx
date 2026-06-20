@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import Link from "next/link";
 import { Loader2, BarChart3, Mail, MessageSquare, Target, DollarSign, Link2 } from "lucide-react";
 import { FunnelBar } from "@/components/FunnelBar";
+import { AnalyticsEnhancements } from "@/components/AnalyticsEnhancements";
 import { formatUsdCost } from "@/lib/llm-pricing";
 import { readRouteCache, writeRouteCache } from "@/lib/route-cache";
 import { PageShell } from "@/components/ui/PageShell";
@@ -631,6 +632,12 @@ export default function AnalyticsPage() {
                 </div>
               </Card>
             )}
+          {/* Enhanced analytics: cohort analysis, source attribution, time-to-hire */}
+          {jobId && (
+            <div className="mt-8">
+              <AnalyticsEnhancements jobId={jobId} />
+            </div>
+          )}
           </>
         ) : null}
     </PageShell>

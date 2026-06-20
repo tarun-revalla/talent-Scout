@@ -285,3 +285,139 @@ export async function listScorecardsForMatch(
     };
   });
 }
+
+export interface ConsensusOutlier {
+  interviewerId: string;
+  interviewerName: string;
+  dimension: "overall" | "technical" | "communication";
+  value: number;
+  averageValue: number;
+  deviation: number;
+}
+
+export interface RoundConsensus {
+  roundIndex: number;
+  submittedCount: number;
+  pendingCount: number;
+  totalCount: number;
+  overallAverage: number | null;
+  technicalAverage: number | null;
+  communicationAverage: number | null;
+  recommendationBreakdown: Record<ScorecardRecommendation, number>;
+  recommendationConsensus: ScorecardRecommendation | "split" | null;
+  outliers: ConsensusOutlier[];
+  autoRecommendation: "advance" | "hold" | "reject" | "hire" | null;
+}
+
+export async function getConsensusForRound(
+  matchId: string,
+  roundIndex: number,
+): Promise<RoundConsensus> {
+  const scorecards = await listScorecardsForMatch(matchId);
+  const roundCards = scorecards.filter((s) => s.round_index === roundIndex && s.status === "submitted");
+
+  const avg = (vals: (number | null)[]): number | null => {
+    const nums = vals.filter((v): v is number => typeof v === "number");
+    if (nums.length === 0) return null;
+    return Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10;
+  };
+
+  const overallAvg = avg(roundCards.map((s) => s.overall_rating));
+  const technicalAvg = avg(roundCards.map((s) => s.technical_rating));
+  const communicationAvg = avg(roundCards.map((s) => s.communication_rating));
+
+  const recommendationBreakdown: Record<ScorecardRecommendation, number> = {
+    strong_yes: 0,
+    yes: 0,
+    no: 0,
+    strong_no: 0,
+  };
+
+  for (const card of roundCards) {
+    if (card.recommendation) {
+      recommendationBreakdown[card.recommendation]++;
+    }
+  }
+
+  // Determine consensus recommendation
+  let recommendationConsensus: ScorecardRecommendation | "split" | null = null;
+  if (roundCards.length > 0) {
+    const maxCount = Math.max(...Object.values(recommendationBreakdown));
+    const consensusRecs = Object.entries(recommendationBreakdown)
+      .filter(([_, count]) => count === maxCount)
+      .map(([rec]) => rec as ScorecardRecommendation);
+
+    if (consensusRecs.length === 1) {
+      recommendationConsensus = consensusRecs[0];
+    } else if (consensusRecs.length > 1) {
+      recommendationConsensus = "split";
+    }
+  }
+
+  // Find outliers (ratings > 1 point away from average)
+  const outliers: ConsensusOutlier[] = [];
+  if (overallAvg != null) {
+    for (const card of roundCards) {
+      if (card.overall_rating != null && Math.abs(card.overall_rating - overallAvg) > 1) {
+        outliers.push({
+          interviewerId: card.interviewer_id,
+          interviewerName: card.interviewer_name,
+          dimension: "overall",
+          value: card.overall_rating,
+          averageValue: overallAvg,
+          deviation: card.overall_rating - overallAvg,
+        });
+      }
+    }
+  }
+
+  if (technicalAvg != null) {
+    for (const card of roundCards) {
+      if (card.technical_rating != null && Math.abs(card.technical_rating - technicalAvg) > 1) {
+        outliers.push({
+          interviewerId: card.interviewer_id,
+          interviewerName: card.interviewer_name,
+          dimension: "technical",
+          value: card.technical_rating,
+          averageValue: technicalAvg,
+          deviation: card.technical_rating - technicalAvg,
+        });
+      }
+    }
+  }
+
+  // Auto-recommendation logic: based on consensus + some thresholds
+  let autoRecommendation: "advance" | "hold" | "reject" | "hire" | null = null;
+  if (recommendationConsensus === "strong_yes") {
+    autoRecommendation = "advance";
+  } else if (recommendationConsensus === "yes" && roundCards.length >= 2) {
+    autoRecommendation = "advance";
+  } else if (recommendationConsensus === "strong_no") {
+    autoRecommendation = "reject";
+  } else if (recommendationConsensus === "no" && roundCards.length >= 2) {
+    autoRecommendation = "reject";
+  } else if (recommendationConsensus === "split" && roundCards.length >= 3) {
+    // For split recommendations with 3+ interviewers, check majority
+    const yesVotes = (recommendationBreakdown.strong_yes ?? 0) + (recommendationBreakdown.yes ?? 0);
+    const noVotes = (recommendationBreakdown.strong_no ?? 0) + (recommendationBreakdown.no ?? 0);
+    if (yesVotes > noVotes) {
+      autoRecommendation = "hold"; // Hold for manual review due to disagreement
+    } else if (noVotes > yesVotes) {
+      autoRecommendation = "hold";
+    }
+  }
+
+  return {
+    roundIndex,
+    submittedCount: roundCards.length,
+    pendingCount: scorecards.filter((s) => s.round_index === roundIndex && s.status === "pending").length,
+    totalCount: scorecards.filter((s) => s.round_index === roundIndex).length,
+    overallAverage: overallAvg,
+    technicalAverage: technicalAvg,
+    communicationAverage: communicationAvg,
+    recommendationBreakdown,
+    recommendationConsensus,
+    outliers,
+    autoRecommendation,
+  };
+}
