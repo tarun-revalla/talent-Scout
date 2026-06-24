@@ -4,6 +4,10 @@ Talent Scout is an AI-powered hiring platform that automates the most time-consu
 
 Instead of spending hours reading resumes, writing emails, and chasing replies, you paste a job description and let the system do the work.
 
+**Try the live MVP:** [Open Jobs →](https://talent-scout-yext.vercel.app/jobs)
+
+For stakeholders (productivity, hosting, security): see [PRODUCT.md](PRODUCT.md).
+
 ---
 
 ## What it does
@@ -136,4 +140,5 @@ Either set the job to **Closed** (stops all new outreach) or toggle **Auto-engag
 
 ## Setup (for developers)
 
-See [TECHDETAILS.md](TECHDETAILS.md) for architecture, environment variables, database migrations, and deployment instructions.
+- **Stakeholders / PMs:** [PRODUCT.md](PRODUCT.md) — try link, productivity, hosting, security (plain language)
+- **Engineers:** [TECHDETAILS.md](TECHDETAILS.md) — architecture, env vars, migrations, deployment
