@@ -15,11 +15,12 @@ export async function GET(
     const { supabaseServer } = await import("@/lib/db");
     const sb = supabaseServer();
 
+    // De-duplication of round_index happens below via Set — Supabase has no
+    // .distinct(); selecting the column for all rows and uniquing is correct.
     const { data: roundIndices, error: roundError } = await sb
       .from("interviewer_scorecards")
       .select("round_index")
-      .eq("match_id", matchId)
-      .distinct();
+      .eq("match_id", matchId);
 
     if (roundError) throw roundError;
 

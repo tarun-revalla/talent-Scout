@@ -6,11 +6,19 @@ let _transport: Transporter | null = null;
 
 export function transport(): Transporter {
   if (!_transport) {
+    const port = env.gmailSmtpPort();
     _transport = nodemailer.createTransport({
       host: env.gmailSmtpHost(),
-      port: 465,
-      secure: true,
+      port,
+      secure: port === 465, // 465 = implicit TLS; 587 = STARTTLS
+      requireTLS: port !== 465,
       auth: { user: env.gmailUser(), pass: env.gmailAppPassword() },
+      // Fail fast on a stalled connection (Railway egress can be slow/blocked)
+      // so the queue's exponential-backoff retry kicks in instead of hanging.
+      dnsTimeout: 10_000,
+      connectionTimeout: 15_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
   }
   return _transport;

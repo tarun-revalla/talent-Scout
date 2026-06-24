@@ -11,7 +11,6 @@ import {
   Wallet,
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
-import { Button } from "@/components/ui/Button";
 import { APP_NAME, BRAND } from "@/lib/brand";
 import { formatJobLocation, formatJobSalary } from "@/lib/job-display";
 import { getOrCreateVisitorId } from "@/lib/invite-visitor";
@@ -415,21 +414,42 @@ export function ApplyJobPage({ token }: ApplyJobPageProps) {
                     </button>
                   </div>
 
-                  <Button
-                    type="submit"
-                    size="lg"
-                    disabled={submitting || !resumeFile || !linkedin.trim()}
-                    className="w-full"
-                  >
-                    {submitting ? (
+                  {(() => {
+                    const missing: string[] = [];
+                    if (!resumeFile) missing.push("a resume");
+                    if (!linkedin.trim()) missing.push("your LinkedIn URL");
+                    const canSubmit = missing.length === 0 && !submitting;
+                    return (
                       <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Submitting…
+                        {/* Explicit, always-visible styling for both states — a disabled
+                            button must stay clearly readable, not fade out via opacity. */}
+                        <button
+                          type="submit"
+                          disabled={!canSubmit}
+                          className={
+                            "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold tracking-tight shadow-sm transition-colors " +
+                            (canSubmit
+                              ? "bg-cobalt-600 text-white shadow-cobalt-600/20 hover:bg-cobalt-700 active:bg-cobalt-800 cursor-pointer"
+                              : "bg-slate-200 text-slate-500 cursor-not-allowed")
+                          }
+                        >
+                          {submitting ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Submitting…
+                            </>
+                          ) : (
+                            "Submit application"
+                          )}
+                        </button>
+                        {missing.length > 0 && !submitting && (
+                          <p className="text-center text-xs font-medium text-slate-500">
+                            Add {missing.join(" and ")} to submit.
+                          </p>
+                        )}
                       </>
-                    ) : (
-                      "Submit application"
-                    )}
-                  </Button>
+                    );
+                  })()}
 
                   <p className="text-center text-xs text-slate-400">
                     By applying, you agree to your information being processed for recruitment

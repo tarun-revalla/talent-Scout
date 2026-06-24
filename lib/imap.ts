@@ -115,12 +115,16 @@ function isBounceFromAddress(from: string): boolean {
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, rej) =>
-      setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms),
-    ),
-  ]);
+  // If the timeout wins the race, imapflow still settles the original promise
+  // later. Without a handler that late rejection surfaces as an
+  // `unhandledRejection` ("Connection not available") and can destabilize the
+  // worker. Attach a no-op catch so the loser is always handled.
+  p.catch(() => {});
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 export async function fetchUnseenInbound(opts: {
@@ -140,9 +144,21 @@ export async function fetchUnseenInbound(opts: {
     logger: false,
   });
 
+  // ImapFlow is an EventEmitter — an emitted 'error' with no listener throws as
+  // an uncaughtException (e.g. socket drop mid-poll). Swallow it; the per-op
+  // timeouts below already surface failures to the caller.
+  client.on("error", (err) => {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "imap: client error event (ignored)",
+    );
+  });
+
+  let connected = false;
   const out: InboundMessage[] = [];
   try {
     await withTimeout(client.connect(), IMAP_OP_TIMEOUT_MS, "imap.connect");
+    connected = true;
     await withTimeout(client.mailboxOpen("INBOX"), IMAP_OP_TIMEOUT_MS, "imap.mailboxOpen");
 
     // Only unseen mail FROM known candidates (or bounce senders).
@@ -209,8 +225,18 @@ export async function fetchUnseenInbound(opts: {
       }
     }
   } finally {
+    // Only LOGOUT over a live connection — calling it after a failed/timed-out
+    // connect throws "Connection not available". Always close() afterward to
+    // tear down the socket and avoid leaking half-open connections.
+    if (connected) {
+      try {
+        await withTimeout(client.logout(), 5_000, "imap.logout");
+      } catch {
+        // ignore — close() below still frees the socket
+      }
+    }
     try {
-      await withTimeout(client.logout(), 5_000, "imap.logout");
+      client.close();
     } catch {
       // ignore
     }
