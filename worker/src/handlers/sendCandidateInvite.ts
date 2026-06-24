@@ -7,12 +7,24 @@ import type { QueueJob } from "@/lib/queue";
 import { buildIcsEvent } from "@/lib/calendar/ics-generate";
 import { buildCandidateInviteEmail, buildCandidateRescheduleUrl } from "@/lib/scheduling-email";
 import {
+  assertSlotReservedForSession,
   confirmScheduledInterview,
   getLatestProposal,
   getSession,
 } from "@/lib/scheduling";
 import { listInterviewers } from "@/lib/interviewers";
-import { overlapsSlot } from "@/lib/calendar/validate";
+
+function uniqueEmails(emails: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const email of emails) {
+    const normalized = email?.trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
 
 export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
   const sb = supabaseServer();
@@ -32,21 +44,12 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
     throw new Error("no accepted proposal");
   }
 
-  const stillFree = await overlapsSlot(
-    session.interviewer_ids,
-    proposal.slot_start,
-    proposal.slot_end,
-  );
-  if (!stillFree) {
-    throw new Error("slot no longer available at send time");
-  }
-
   const { data: match } = await sb
     .from("matches")
     .select(
       `
       id, thread_id,
-      candidate:candidates ( name, email, email_invalid ),
+      candidate:candidates ( id, name, email, email_invalid ),
       job:jobs ( id, title, email_settings, interview_rounds )
     `,
     )
@@ -61,6 +64,12 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
     log.info({ matchId: match.id }, "send_candidate_invite: skipping (email invalid)");
     return;
   }
+
+  await assertSlotReservedForSession({
+    session,
+    proposal,
+    candidateId: (candidate.id as string | null) ?? null,
+  });
 
   const interviewers = await listInterviewers(jobRow.id as string);
   const panel = interviewers.filter((iv) => session.interviewer_ids.includes(iv.id));
@@ -108,10 +117,22 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
     organizerName: emailSettings.recruiter_name,
     attendeeEmail: candidate.email as string,
     attendeeName: candidate.name as string | null,
+    additionalAttendees: uniqueEmails([env.gmailUser(), ...panel.map((iv) => iv.email)])
+      .filter((email) => email !== (candidate.email as string).toLowerCase())
+      .map((email) => ({
+        email,
+        name: email === env.gmailUser()
+          ? emailSettings.recruiter_name
+          : panel.find((iv) => iv.email.toLowerCase() === email)?.name,
+      })),
   });
+  const cc = uniqueEmails([env.gmailUser(), ...panel.map((iv) => iv.email)]).filter(
+    (email) => email !== (candidate.email as string).toLowerCase(),
+  );
 
   const sent = await sendEmail({
     to: candidate.email as string,
+    cc,
     subject,
     body,
     htmlOptions: {

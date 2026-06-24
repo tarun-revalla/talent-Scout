@@ -4,11 +4,12 @@ import { resolveEmailSettings } from "@/lib/email-templates";
 import { log } from "@/lib/logger";
 import type { QueueJob } from "@/lib/queue";
 import { buildSchedulingProposalEmail } from "@/lib/scheduling-email";
-import { getProposalByToken } from "@/lib/scheduling";
+import { getLatestProposal, getProposalByToken } from "@/lib/scheduling";
 
 export async function handleSendSchedulingProposal(job: QueueJob): Promise<void> {
   const sb = supabaseServer();
   const payload = job.payload as {
+    sessionId?: string;
     proposalId?: string;
     responseToken?: string;
     origin?: string;
@@ -25,6 +26,11 @@ export async function handleSendSchedulingProposal(job: QueueJob): Promise<void>
       .single();
     if (proposal?.response_token) {
       ctx = await getProposalByToken(proposal.response_token as string);
+    }
+  } else if (payload.sessionId) {
+    const proposal = await getLatestProposal(payload.sessionId);
+    if (proposal?.response_token) {
+      ctx = await getProposalByToken(proposal.response_token);
     }
   }
   if (!ctx) throw new Error("scheduling proposal not found");

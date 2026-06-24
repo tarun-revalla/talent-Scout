@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Calendar, CheckCircle2, Loader2, ThumbsDown, ThumbsUp, XCircle } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/Button";
@@ -26,6 +26,7 @@ interface ProposalData {
 }
 
 export function ScheduleRespondPage({ token }: { token: string }) {
+  const [mounted, setMounted] = useState(false);
   const [data, setData] = useState<ProposalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,8 +53,14 @@ export function ScheduleRespondPage({ token }: { token: string }) {
   }, [token]);
 
   useEffect(() => {
+    setMounted(true);
     void load();
   }, [load]);
+
+  const selectedSlotLabel = useMemo(() => {
+    if (!selectedSlot) return null;
+    return formatLocalShort(selectedSlot);
+  }, [selectedSlot]);
 
   async function respond(action: "accept" | "reject") {
     setBusy(true);
@@ -94,7 +101,7 @@ export function ScheduleRespondPage({ token }: { token: string }) {
             style={{ background: `linear-gradient(135deg, ${BRAND.colors.primary}, ${BRAND.colors.primaryLight})` }}
           >
             <div className="flex items-center gap-2 text-white/90 text-sm mb-1">
-              <Calendar className="h-4 w-4" />
+              {mounted && <Calendar className="h-4 w-4" aria-hidden="true" />}
               Interview scheduling
             </div>
             <h1 className="text-xl font-bold">{APP_NAME}</h1>
@@ -142,36 +149,49 @@ export function ScheduleRespondPage({ token }: { token: string }) {
                 </div>
 
                 {data.slots.length > 1 ? (
-                  <div className="space-y-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-cobalt-600">
+                  <div className="space-y-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-700">
                       Pick a time ({data.durationMinutes} min · {data.timezone})
                     </p>
-                    <div className="space-y-2">
+                    <div className="grid gap-2">
                       {data.slots.map((slot) => (
                         <button
                           key={slot.start}
                           type="button"
                           onClick={() => setSelectedSlot(slot.start)}
-                          className={`w-full text-left rounded-xl border px-4 py-3 text-sm transition-colors cursor-pointer ${
+                          className={`group flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-cobalt-600 focus:ring-offset-2 ${
                             selectedSlot === slot.start
-                              ? "border-cobalt-600 bg-cobalt-50 ring-1 ring-cobalt-600 font-semibold text-slate-900"
-                              : "border-slate-200 hover:border-cobalt-200 hover:bg-slate-50 text-slate-700"
+                              ? "border-cobalt-700 bg-cobalt-700 font-semibold text-white shadow-sm"
+                              : "border-slate-300 bg-white text-slate-900 hover:border-cobalt-500 hover:bg-cobalt-50"
                           }`}
                         >
-                          {formatLocalShort(slot.start)}
+                          <span>{mounted ? formatLocalShort(slot.start) : "Loading time..."}</span>
+                          <span
+                            className={`ml-3 h-4 w-4 rounded-full border ${
+                              selectedSlot === slot.start
+                                ? "border-white bg-white shadow-inner"
+                                : "border-slate-400 group-hover:border-cobalt-600"
+                            }`}
+                            aria-hidden="true"
+                          />
                         </button>
                       ))}
                     </div>
+                    {selectedSlotLabel && (
+                      <p className="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+                        Selected: {selectedSlotLabel}
+                      </p>
+                    )}
                   </div>
                 ) : (
-                  <div className="rounded-xl bg-cobalt-50 border border-cobalt-100 p-4 space-y-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-cobalt-600">
+                  <div className="rounded-lg bg-slate-900 border border-slate-900 p-4 space-y-2 text-white">
+                    <p className="text-xs font-bold uppercase tracking-wide text-cobalt-100">
                       Proposed time
                     </p>
-                    <p className="text-lg font-bold text-slate-900">
-                      {formatLocalShort(data.slotStart)}
+                    <p className="text-lg font-bold">
+                      {mounted ? formatLocalShort(data.slotStart) : "Loading time..."}
                     </p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-slate-200">
                       {data.durationMinutes} minutes · {data.timezone}
                     </p>
                   </div>
@@ -202,7 +222,7 @@ export function ScheduleRespondPage({ token }: { token: string }) {
                     ) : (
                       <ThumbsUp className="h-4 w-4" />
                     )}
-                    {data.slots.length > 1 ? "Confirm time" : "Accept"}
+                    {data.slots.length > 1 ? "Confirm selected time" : "Accept"}
                   </Button>
                   <Button
                     variant="secondary"

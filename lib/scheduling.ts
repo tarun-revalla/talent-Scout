@@ -2,7 +2,6 @@ import { supabaseServer } from "./db";
 import { getOverlapAvailability, listInterviewers } from "./interviewers";
 import { generateSchedulingToken } from "./scheduling-token";
 import type { FreeSlot } from "./calendar/types";
-import { overlapsSlot } from "./calendar/validate";
 import { enqueue } from "./queue";
 
 export type SchedulingStatus =
@@ -45,6 +44,11 @@ export interface SchedulingProposal {
   proposal_index: number;
 }
 
+function slotsOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+  return new Date(aStart).getTime() < new Date(bEnd).getTime() &&
+    new Date(bStart).getTime() < new Date(aEnd).getTime();
+}
+
 function rowToSession(r: Record<string, unknown>): SchedulingSession {
   return {
     id: r.id as string,
@@ -67,7 +71,181 @@ export async function findOverlapSlots(
   daysAhead = 14,
 ): Promise<{ slots: FreeSlot[] }> {
   const { slots } = await getOverlapAvailability(interviewerIds, durationMinutes, daysAhead);
-  return { slots };
+  return { slots: await filterReservedSlots(interviewerIds, slots) };
+}
+
+async function filterReservedSlots(interviewerIds: string[], slots: FreeSlot[]): Promise<FreeSlot[]> {
+  if (interviewerIds.length === 0 || slots.length === 0) return slots;
+
+  const minStart = slots.reduce((min, s) => (s.start < min ? s.start : min), slots[0]!.start);
+  const maxEnd = slots.reduce((max, s) => (s.end > max ? s.end : max), slots[0]!.end);
+  const sb = supabaseServer();
+  const { data, error } = await sb
+    .from("scheduling_slot_reservations")
+    .select("interviewer_id, slot_start, slot_end")
+    .in("interviewer_id", interviewerIds)
+    .in("status", ["active", "confirmed"])
+    .lt("slot_start", maxEnd)
+    .gt("slot_end", minStart);
+  if (error) throw new Error(error.message);
+
+  const reservations = data ?? [];
+  return slots.filter(
+    (slot) =>
+      !reservations.some((r) =>
+        slotsOverlap(
+          slot.start,
+          slot.end,
+          r.slot_start as string,
+          r.slot_end as string,
+        ),
+      ),
+  );
+}
+
+async function reserveAcceptedSlot(args: {
+  session: SchedulingSession;
+  proposal: SchedulingProposal;
+  match: Record<string, unknown>;
+  slotStart: string;
+  slotEnd: string;
+}): Promise<void> {
+  const sb = supabaseServer();
+  const { data: existing, error: existingErr } = await sb
+    .from("scheduling_slot_reservations")
+    .select("id")
+    .eq("session_id", args.session.id)
+    .in("status", ["active", "confirmed"])
+    .limit(1);
+  if (existingErr) throw new Error(existingErr.message);
+  if (existing && existing.length > 0) return;
+
+  const rows = args.session.interviewer_ids.map((interviewerId) => ({
+    session_id: args.session.id,
+    proposal_id: args.proposal.id,
+    match_id: args.session.match_id,
+    candidate_id: (args.match.candidate_id as string | null) ?? null,
+    interviewer_id: interviewerId,
+    slot_start: args.slotStart,
+    slot_end: args.slotEnd,
+    status: "active",
+  }));
+
+  const { error } = await sb.from("scheduling_slot_reservations").insert(rows);
+  if (error) {
+    throw new Error("Selected slot is no longer available — another interview reserved it");
+  }
+}
+
+export async function assertSlotReservedForSession(args: {
+  session: SchedulingSession;
+  proposal: SchedulingProposal;
+  candidateId: string | null;
+}): Promise<void> {
+  const sb = supabaseServer();
+  const { data, error } = await sb
+    .from("scheduling_slot_reservations")
+    .select("interviewer_id, candidate_id")
+    .eq("session_id", args.session.id)
+    .eq("proposal_id", args.proposal.id)
+    .eq("match_id", args.session.match_id)
+    .eq("slot_start", args.proposal.slot_start)
+    .eq("slot_end", args.proposal.slot_end)
+    .in("status", ["active", "confirmed"]);
+  if (error) throw new Error(error.message);
+
+  const reservedInterviewers = new Set((data ?? []).map((r) => r.interviewer_id as string));
+  const missing = args.session.interviewer_ids.filter((id) => !reservedInterviewers.has(id));
+  if (missing.length > 0) {
+    throw new Error("Selected slot is not reserved for this interview session");
+  }
+
+  if (args.candidateId) {
+    const wrongCandidate = (data ?? []).some(
+      (r) => r.candidate_id && r.candidate_id !== args.candidateId,
+    );
+    if (wrongCandidate) {
+      throw new Error("Selected slot is reserved for a different candidate");
+    }
+  }
+}
+
+async function createNextProposalAfterRejection(args: {
+  session: SchedulingSession;
+  proposal: SchedulingProposal;
+  now: string;
+}): Promise<{ session: SchedulingSession; nextProposal?: SchedulingProposal }> {
+  const sb = supabaseServer();
+  const alreadyOffered = new Set(
+    (args.proposal.proposed_slots ?? []).map((s) => s.start).concat(args.proposal.slot_start),
+  );
+
+  let nextSlots: FreeSlot[] = [];
+  let nextInterviewerIds = args.session.interviewer_ids;
+
+  const { slots: primarySlots } = await findOverlapSlots(
+    args.session.interviewer_ids,
+    args.session.duration_minutes,
+  );
+  nextSlots = primarySlots.filter(
+    (s) => !alreadyOffered.has(s.start) && new Date(s.start) > new Date(),
+  );
+
+  if (nextSlots.length === 0 && args.session.fallback_interviewer_ids.length > 0) {
+    const { slots: fallbackSlots } = await findOverlapSlots(
+      args.session.fallback_interviewer_ids,
+      args.session.duration_minutes,
+    );
+    nextSlots = fallbackSlots.filter((s) => new Date(s.start) > new Date());
+    if (nextSlots.length > 0) nextInterviewerIds = args.session.fallback_interviewer_ids;
+  }
+
+  if (nextSlots.length === 0) {
+    await sb
+      .from("scheduling_sessions")
+      .update({ status: "expired", updated_at: args.now })
+      .eq("id", args.session.id);
+    throw new Error("No alternative slots available — please contact the recruiter");
+  }
+
+  if (nextInterviewerIds !== args.session.interviewer_ids) {
+    await sb
+      .from("scheduling_sessions")
+      .update({ interviewer_ids: nextInterviewerIds, updated_at: args.now })
+      .eq("id", args.session.id);
+  }
+
+  const offered = nextSlots.slice(0, FALLBACK_SLOT_COUNT);
+  const proposedSlots = slotsFromStarts(
+    offered.map((s) => s.start),
+    args.session.duration_minutes,
+  );
+  const firstSlot = proposedSlots[0]!;
+  const nextToken = generateSchedulingToken();
+  const nextCandidateToken = generateSchedulingToken();
+  const { data: nextProposal, error } = await sb
+    .from("scheduling_proposals")
+    .insert({
+      session_id: args.session.id,
+      slot_start: firstSlot.start,
+      slot_end: firstSlot.end,
+      proposed_slots: proposedSlots,
+      status: "pending",
+      response_token: nextToken,
+      candidate_reschedule_token: nextCandidateToken,
+      proposal_index: args.proposal.proposal_index + 1,
+    })
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+
+  await sb
+    .from("scheduling_sessions")
+    .update({ status: "pending_approval", updated_at: args.now })
+    .eq("id", args.session.id);
+
+  const session = (await getSession(args.session.id))!;
+  return { session, nextProposal: nextProposal as SchedulingProposal };
 }
 
 export async function getSession(id: string): Promise<SchedulingSession | null> {
@@ -265,7 +443,7 @@ export async function getProposalByToken(token: string): Promise<{
     .from("matches")
     .select(
       `
-      id, job_id, current_round_index,
+      id, job_id, candidate_id, current_round_index,
       candidate:candidates ( name, email ),
       job:jobs ( id, title, interview_rounds )
     `,
@@ -325,83 +503,15 @@ export async function respondToProposal(
       .update({ status: "rejected", responded_at: now, responder_email: responderEmail ?? null })
       .eq("id", ctx.proposal.id);
 
-    // Collect slots already proposed so we don't re-offer them.
-    const alreadyOffered = new Set(
-      (ctx.proposal.proposed_slots ?? []).map((s) => s.start).concat(ctx.proposal.slot_start),
-    );
-
-    // Try primary interviewers first, then fall back to fallback_interviewer_ids.
-    let nextSlots: FreeSlot[] = [];
-    let nextInterviewerIds = ctx.session.interviewer_ids;
-
-    const { slots: primarySlots } = await findOverlapSlots(
-      ctx.session.interviewer_ids,
-      ctx.session.duration_minutes,
-    );
-    nextSlots = primarySlots.filter(
-      (s) => !alreadyOffered.has(s.start) && new Date(s.start) > new Date(),
-    );
-
-    if (nextSlots.length === 0 && ctx.session.fallback_interviewer_ids.length > 0) {
-      const { slots: fallbackSlots } = await findOverlapSlots(
-        ctx.session.fallback_interviewer_ids,
-        ctx.session.duration_minutes,
-      );
-      nextSlots = fallbackSlots.filter((s) => new Date(s.start) > new Date());
-      if (nextSlots.length > 0) nextInterviewerIds = ctx.session.fallback_interviewer_ids;
-    }
-
-    if (nextSlots.length === 0) {
-      await sb
-        .from("scheduling_sessions")
-        .update({ status: "expired", updated_at: now })
-        .eq("id", ctx.session.id);
-      throw new Error("No alternative slots available — please contact the recruiter");
-    }
-
-    // If switching to fallback panel, update session's interviewer_ids.
-    if (nextInterviewerIds !== ctx.session.interviewer_ids) {
-      await sb
-        .from("scheduling_sessions")
-        .update({ interviewer_ids: nextInterviewerIds, updated_at: now })
-        .eq("id", ctx.session.id);
-    }
-
-    const offered = nextSlots.slice(0, FALLBACK_SLOT_COUNT);
-    const proposedSlots = slotsFromStarts(
-      offered.map((s) => s.start),
-      ctx.session.duration_minutes,
-    );
-    const firstSlot = proposedSlots[0]!;
-    const nextIndex = ctx.proposal.proposal_index + 1;
-    const nextToken = generateSchedulingToken();
-    const nextCandidateToken = generateSchedulingToken();
-    const { data: nextProposal, error } = await sb
-      .from("scheduling_proposals")
-      .insert({
-        session_id: ctx.session.id,
-        slot_start: firstSlot.start,
-        slot_end: firstSlot.end,
-        proposed_slots: proposedSlots,
-        status: "pending",
-        response_token: nextToken,
-        candidate_reschedule_token: nextCandidateToken,
-        proposal_index: nextIndex,
-      })
-      .select("*")
-      .single();
-    if (error) throw new Error(error.message);
-
-    await sb
-      .from("scheduling_sessions")
-      .update({ status: "pending_approval", updated_at: now })
-      .eq("id", ctx.session.id);
-
-    const session = (await getSession(ctx.session.id))!;
+    const { session, nextProposal } = await createNextProposalAfterRejection({
+      session: ctx.session,
+      proposal: ctx.proposal,
+      now,
+    });
     return {
       session,
       proposal: { ...ctx.proposal, status: "rejected", responded_at: now },
-      nextProposal: nextProposal as SchedulingProposal,
+      nextProposal,
     };
   }
 
@@ -416,15 +526,13 @@ export async function respondToProposal(
     chosenEnd = match.end;
   }
 
-  // Re-validate calendar freshness for the chosen slot.
-  const stillFree = await overlapsSlot(
-    ctx.session.interviewer_ids,
-    chosenStart,
-    chosenEnd,
-  );
-  if (!stillFree) {
-    throw new Error("This slot was just booked — we'll propose a new time shortly");
-  }
+  await reserveAcceptedSlot({
+    session: ctx.session,
+    proposal: ctx.proposal,
+    match: ctx.match,
+    slotStart: chosenStart,
+    slotEnd: chosenEnd,
+  });
 
   await sb
     .from("scheduling_proposals")
@@ -446,6 +554,47 @@ export async function respondToProposal(
   return {
     session,
     proposal: { ...ctx.proposal, status: "accepted", slot_start: chosenStart, slot_end: chosenEnd, responded_at: now },
+  };
+}
+
+export async function cancelAcceptedInterview(
+  token: string,
+): Promise<{ session: SchedulingSession; proposal: SchedulingProposal; nextProposal?: SchedulingProposal }> {
+  const ctx = await getProposalByToken(token);
+  if (!ctx) throw new Error("Invalid or expired link");
+  if (ctx.proposal.status !== "accepted" || !["approved", "confirmed"].includes(ctx.session.status)) {
+    throw new Error("This interview is not currently committed");
+  }
+
+  const sb = supabaseServer();
+  const now = new Date().toISOString();
+
+  await sb
+    .from("scheduling_slot_reservations")
+    .update({ status: "released", released_at: now })
+    .eq("session_id", ctx.session.id)
+    .in("status", ["active", "confirmed"]);
+
+  await sb
+    .from("scheduled_interviews")
+    .update({ confirmed_at: null })
+    .eq("session_id", ctx.session.id);
+
+  await sb
+    .from("scheduling_proposals")
+    .update({ status: "rejected", responded_at: now })
+    .eq("id", ctx.proposal.id);
+
+  const { session, nextProposal } = await createNextProposalAfterRejection({
+    session: ctx.session,
+    proposal: ctx.proposal,
+    now,
+  });
+
+  return {
+    session,
+    proposal: { ...ctx.proposal, status: "rejected", responded_at: now },
+    nextProposal,
   };
 }
 
@@ -477,6 +626,12 @@ export async function confirmScheduledInterview(sessionId: string): Promise<void
     .from("scheduling_sessions")
     .update({ status: "confirmed", updated_at: now })
     .eq("id", sessionId);
+
+  await sb
+    .from("scheduling_slot_reservations")
+    .update({ status: "confirmed" })
+    .eq("session_id", sessionId)
+    .eq("status", "active");
 
   // Schedule prep packet 24h before the interview starts.
   const startsAt = new Date(proposal.slot_start);
@@ -536,4 +691,9 @@ export async function cancelConfirmedInterview(sessionId: string): Promise<void>
     .from("scheduling_sessions")
     .update({ status: "cancelled", updated_at: now })
     .eq("id", sessionId);
+  await sb
+    .from("scheduling_slot_reservations")
+    .update({ status: "released", released_at: now })
+    .eq("session_id", sessionId)
+    .in("status", ["active", "confirmed"]);
 }

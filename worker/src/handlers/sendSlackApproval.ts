@@ -106,6 +106,18 @@ export async function handleSendSlackApproval(job: QueueJob): Promise<void> {
         .from("scheduling_proposals")
         .update({ slack_ts: result.ts })
         .eq("id", proposal.id);
+      await sb.from("scheduling_slack_messages").upsert(
+        {
+          proposal_id: proposal.id,
+          session_id: session.id,
+          interviewer_id: interviewer.id,
+          slack_channel_id: target,
+          slack_ts: result.ts,
+          status: "sent",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "proposal_id,slack_channel_id,slack_ts" },
+      );
       slackUsersNotified.push(target);
       log.info({ target, ts: result.ts }, "send_slack_approval: sent Slack approval request");
     } else {

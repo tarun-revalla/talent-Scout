@@ -4,6 +4,7 @@ import { wrapEmailHtml, type EmailHtmlOptions } from "./email-html";
 
 export interface SendArgs {
   to: string;
+  cc?: string | string[];
   subject: string;
   body: string;
   inReplyTo?: string | null;
@@ -21,6 +22,21 @@ export interface SendResult {
   messageId: string;
   envelopeMessageId: string | null;
   acceptedAt: string;
+}
+
+interface GmailSendResponse {
+  id?: string;
+}
+
+interface GmailMetadataResponse {
+  payload?: {
+    headers?: Array<{ name?: string; value?: string }>;
+  };
+}
+
+function findHeader(headers: Array<{ name?: string; value?: string }> | undefined, name: string): string | null {
+  const found = headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value;
+  return found?.trim() || null;
 }
 
 async function sendViaGmailApi(message: SendMailOptions): Promise<SendResult> {
@@ -61,9 +77,26 @@ async function sendViaGmailApi(message: SendMailOptions): Promise<SendResult> {
   if (!sendRes.ok) {
     throw new Error(`gmail api send failed: ${sendRes.status} ${await sendRes.text()}`);
   }
+  const sent = (await sendRes.json()) as GmailSendResponse;
+
+  let deliveredMessageId = compiled.messageId ?? "";
+  if (sent.id) {
+    const metaRes = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(
+        env.gmailUser(),
+      )}/messages/${encodeURIComponent(sent.id)}?format=metadata&metadataHeaders=Message-ID`,
+      {
+        headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+      },
+    );
+    if (metaRes.ok) {
+      const metadata = (await metaRes.json()) as GmailMetadataResponse;
+      deliveredMessageId = findHeader(metadata.payload?.headers, "Message-ID") ?? deliveredMessageId;
+    }
+  }
 
   return {
-    messageId: compiled.messageId ?? "",
+    messageId: deliveredMessageId,
     envelopeMessageId: null,
     acceptedAt: new Date().toISOString(),
   };
@@ -78,6 +111,7 @@ export async function sendEmail(args: SendArgs): Promise<SendResult> {
   const message = {
     from: env.gmailUser(),
     to: args.to,
+    cc: args.cc,
     subject: args.subject,
     text: args.body,
     html: wrapEmailHtml(args.body, args.htmlOptions),

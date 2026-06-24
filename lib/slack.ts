@@ -34,6 +34,33 @@ export async function postSlackMessage(args: {
   return json;
 }
 
+export async function postSlackThreadMessage(args: {
+  channel: string;
+  threadTs: string;
+  text: string;
+  blocks?: SlackBlock[];
+}): Promise<{ ok: boolean; ts?: string; error?: string }> {
+  const token = env.slackBotToken();
+  if (!token) throw new Error("SLACK_BOT_TOKEN is not configured");
+
+  const res = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      channel: args.channel,
+      thread_ts: args.threadTs,
+      text: args.text,
+      blocks: args.blocks,
+    }),
+  });
+
+  const json = (await res.json()) as { ok: boolean; ts?: string; error?: string };
+  return json;
+}
+
 /**
  * Resolve a Slack user ID (UXXXX) from their email address so the bot can DM
  * them directly instead of posting to a shared channel. Requires the
@@ -155,10 +182,12 @@ export function buildResolvedBlocks(args: {
   roundName: string;
   slotLocal: string;
   action: "accepted" | "rejected";
+  responseToken?: string;
+  origin?: string;
 }): SlackBlock[] {
   const emoji = args.action === "accepted" ? "✅" : "❌";
   const label = args.action === "accepted" ? "Approved" : "Rejected";
-  return [
+  const blocks: SlackBlock[] = [
     {
       type: "section",
       text: {
@@ -170,6 +199,31 @@ export function buildResolvedBlocks(args: {
       },
     },
   ];
+  if (args.action === "accepted" && args.responseToken && args.origin) {
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Cancel interview" },
+          style: "danger",
+          url: `${args.origin}/api/slack/actions?token=${args.responseToken}&action=cancel`,
+          value: args.responseToken,
+          action_id: "cancel_interview",
+          confirm: {
+            title: { type: "plain_text", text: "Cancel interview?" },
+            text: {
+              type: "mrkdwn",
+              text: "This releases the reserved time and asks the system to propose another slot.",
+            },
+            confirm: { type: "plain_text", text: "Cancel interview" },
+            deny: { type: "plain_text", text: "Keep it" },
+          },
+        },
+      ],
+    });
+  }
+  return blocks;
 }
 
 /**

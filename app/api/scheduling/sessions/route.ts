@@ -128,6 +128,10 @@ export async function POST(req: NextRequest) {
     });
 
     const origin = req.nextUrl.origin;
+    await enqueueIfAbsent(body.matchId, "send_slack_approval", {
+      sessionId: result.session.id,
+      origin,
+    });
     await enqueueIfAbsent(body.matchId, "send_scheduling_proposal", {
       responseToken: result.proposal.response_token,
       origin,

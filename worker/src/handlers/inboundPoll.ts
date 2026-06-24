@@ -28,6 +28,28 @@ async function loadCandidateEmails(sb: ReturnType<typeof supabaseServer>): Promi
   return emails;
 }
 
+async function resolveFallbackMatchFromSender(
+  sb: ReturnType<typeof supabaseServer>,
+  fromAddr: string,
+): Promise<string | null> {
+  const { data: candidate } = await sb
+    .from("candidates")
+    .select("id")
+    .eq("email", fromAddr)
+    .maybeSingle();
+  if (!candidate?.id) return null;
+
+  const { data: match } = await sb
+    .from("matches")
+    .select("id")
+    .eq("candidate_id", candidate.id as string)
+    .in("status", ["outreach_sent", "replied"])
+    .order("last_action_at", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+  return (match?.id as string | undefined) ?? null;
+}
+
 export async function inboundPoll(): Promise<void> {
   const sb = supabaseServer();
   const candidateEmails = await loadCandidateEmails(sb);
@@ -81,11 +103,15 @@ export async function inboundPoll(): Promise<void> {
       .select("match_id")
       .eq("message_id", threadRef)
       .maybeSingle();
-    if (!parentConv) {
+    const fallbackMatchId = parentConv ? null : await resolveFallbackMatchFromSender(sb, fromAddr);
+    if (!parentConv && !fallbackMatchId) {
       log.debug({ threadRef, from: m.from }, "inbound: no matching outbound");
       continue;
     }
-    const matchId = parentConv.match_id as string;
+    const matchId = (parentConv?.match_id as string | undefined) ?? fallbackMatchId!;
+    if (!parentConv) {
+      log.warn({ threadRef, from: m.from, matchId }, "inbound: matched by sender fallback");
+    }
 
     const { data: dup } = await sb
       .from("conversations")

@@ -18,7 +18,7 @@ export const runtime = "nodejs";
  *   3. Computes overlapping slots filtered by intent
  *   4. Selects the best slot
  *   5. Creates the session + proposal
- *   6. Enqueues the scheduling proposal email
+ *   6. Enqueues interviewer approval notifications
  *
  * Body: {
  *   matchId: string
@@ -150,7 +150,8 @@ export async function POST(req: NextRequest) {
       urgency: body.urgency,
     });
 
-    // Enqueue proposal email to interviewers.
+    // Enqueue Slack approval and proposal email to interviewers.
+    await enqueue(body.matchId, "send_slack_approval", { sessionId: session.id });
     await enqueue(body.matchId, "send_scheduling_proposal", { sessionId: session.id });
 
     return NextResponse.json({

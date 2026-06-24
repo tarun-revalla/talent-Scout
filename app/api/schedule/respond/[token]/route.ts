@@ -78,6 +78,10 @@ export async function POST(
     const matchId = result.session.match_id;
 
     if (body.action === "reject" && result.nextProposal) {
+      await enqueueIfAbsent(matchId, "send_slack_approval", {
+        sessionId: result.session.id,
+        origin: body.origin,
+      });
       await enqueueIfAbsent(matchId, "send_scheduling_proposal", {
         responseToken: result.nextProposal.response_token,
         origin: body.origin,
@@ -88,9 +92,6 @@ export async function POST(
       await enqueueIfAbsent(matchId, "send_candidate_invite", {
         sessionId: result.session.id,
         origin: body.origin,
-      });
-      await enqueueIfAbsent(matchId, "send_scheduling_confirmed", {
-        sessionId: result.session.id,
       });
     }
 

@@ -10,6 +10,7 @@ export interface IcsEventArgs {
   organizerName: string;
   attendeeEmail: string;
   attendeeName?: string | null;
+  additionalAttendees?: Array<{ email: string; name?: string | null }>;
 }
 
 function formatIcsDate(iso: string): string {
@@ -32,6 +33,12 @@ export function buildIcsEvent(args: IcsEventArgs): string {
   const attendee = args.attendeeName
     ? `CN=${escapeIcs(args.attendeeName)}:mailto:${args.attendeeEmail}`
     : `mailto:${args.attendeeEmail}`;
+  const additionalAttendees = (args.additionalAttendees ?? []).map((a) => {
+    const attendeeValue = a.name
+      ? `CN=${escapeIcs(a.name)}:mailto:${a.email}`
+      : `mailto:${a.email}`;
+    return `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=FALSE;${attendeeValue}`;
+  });
 
   return [
     "BEGIN:VCALENDAR",
@@ -48,6 +55,7 @@ export function buildIcsEvent(args: IcsEventArgs): string {
     `DESCRIPTION:${escapeIcs(args.description)}`,
     `ORGANIZER;CN=${escapeIcs(args.organizerName)}:mailto:${args.organizerEmail}`,
     `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;${attendee}`,
+    ...additionalAttendees,
     "STATUS:CONFIRMED",
     "SEQUENCE:0",
     "END:VEVENT",

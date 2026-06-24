@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { respondToProposal, getProposalByToken } from "@/lib/scheduling";
-import { updateSlackMessage, buildResolvedBlocks, verifySlackSignature } from "@/lib/slack";
+import { cancelAcceptedInterview, respondToProposal, getProposalByToken } from "@/lib/scheduling";
+import {
+  updateSlackMessage,
+  buildResolvedBlocks,
+  verifySlackSignature,
+  postSlackThreadMessage,
+} from "@/lib/slack";
 import { formatSlotLocal } from "@/lib/scheduling-email";
 import { log } from "@/lib/logger";
 import { enqueue } from "@/lib/queue";
 import { supabaseServer } from "@/lib/db";
-import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
 
@@ -20,24 +24,26 @@ export const runtime = "nodejs";
  */
 async function processSlackAction(
   token: string,
-  action: "accept" | "reject",
-): Promise<"approved" | "rejected" | "expired" | "already"> {
+  action: "accept" | "reject" | "cancel",
+): Promise<"approved" | "rejected" | "cancelled" | "expired" | "already"> {
   const ctx = await getProposalByToken(token);
   if (!ctx) return "expired";
-  if (ctx.proposal.status !== "pending") return "already";
+  if (action !== "cancel" && ctx.proposal.status !== "pending") return "already";
+  if (action === "cancel" && ctx.proposal.status !== "accepted") return "already";
 
-  const { session, proposal } = await respondToProposal(token, action);
+  const { session, proposal } =
+    action === "cancel"
+      ? await cancelAcceptedInterview(token)
+      : await respondToProposal(token, action);
 
   // Reflect the resolved state back into the Slack message (best-effort).
   const sb = supabaseServer();
-  const { data: proposalRow } = await sb
-    .from("scheduling_proposals")
-    .select("slack_ts")
-    .eq("id", proposal.id)
-    .maybeSingle();
+  const { data: slackRows } = await sb
+    .from("scheduling_slack_messages")
+    .select("id, slack_channel_id, slack_ts")
+    .eq("proposal_id", proposal.id);
 
-  const slackTs = proposalRow?.slack_ts as string | null;
-  if (slackTs) {
+  for (const slackRow of slackRows ?? []) {
     const slotLocal = formatSlotLocal(proposal.slot_start, session.timezone);
     const blocks = buildResolvedBlocks({
       candidateName: ctx.candidate.name ?? "Candidate",
@@ -45,24 +51,26 @@ async function processSlackAction(
       roundName: `Round ${session.round_index + 1}`,
       slotLocal,
       action: action === "accept" ? "accepted" : "rejected",
+      responseToken: action === "accept" ? proposal.response_token : undefined,
+      origin: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
     });
     try {
-      const interviewer = ctx.interviewers[0];
-      if (interviewer) {
-        const { data: iv } = await sb
-          .from("interviewers")
-          .select("slack_user_id")
-          .eq("id", interviewer.id)
-          .maybeSingle();
-        const channel = iv?.slack_user_id ?? env.slackChannelId();
-        if (channel) {
-          await updateSlackMessage({
-            channel,
-            ts: slackTs,
-            text: `${action === "accept" ? "✅ Approved" : "❌ Rejected"}: ${ctx.candidate.name ?? "Candidate"} interview`,
-            blocks,
-          });
-        }
+      await updateSlackMessage({
+        channel: slackRow.slack_channel_id as string,
+        ts: slackRow.slack_ts as string,
+        text: `${action === "accept" ? "✅ Approved" : action === "cancel" ? "🚫 Cancelled" : "❌ Rejected"}: ${ctx.candidate.name ?? "Candidate"} interview`,
+        blocks,
+      });
+      await sb
+        .from("scheduling_slack_messages")
+        .update({ status: action === "accept" ? "accepted" : action === "cancel" ? "cancelled" : "rejected", updated_at: new Date().toISOString() })
+        .eq("id", slackRow.id);
+      if (action === "cancel") {
+        await postSlackThreadMessage({
+          channel: slackRow.slack_channel_id as string,
+          threadTs: slackRow.slack_ts as string,
+          text: "Interview cancelled. I’m proposing the next available slot in this thread.",
+        });
       }
     } catch (slackErr) {
       log.warn({ err: String(slackErr) }, "slack/actions: failed to update Slack message");
@@ -71,11 +79,18 @@ async function processSlackAction(
 
   if (action === "accept") {
     await enqueue(session.match_id, "send_candidate_invite", { sessionId: session.id });
-    await enqueue(session.match_id, "send_scheduling_confirmed", { sessionId: session.id });
     return "approved";
+  }
+  if (action === "cancel") {
+    if (session.status === "pending_approval") {
+      await enqueue(session.match_id, "send_slack_approval", { sessionId: session.id });
+      await enqueue(session.match_id, "send_scheduling_proposal", { sessionId: session.id });
+    }
+    return "cancelled";
   }
   // On reject, send the next proposal to interviewers if one was generated.
   if (session.status === "pending_approval") {
+    await enqueue(session.match_id, "send_slack_approval", { sessionId: session.id });
     await enqueue(session.match_id, "send_scheduling_proposal", { sessionId: session.id });
   }
   return "rejected";
@@ -89,9 +104,9 @@ async function processSlackAction(
  */
 export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get("token");
-  const action = req.nextUrl.searchParams.get("action") as "accept" | "reject" | null;
+  const action = req.nextUrl.searchParams.get("action") as "accept" | "reject" | "cancel" | null;
 
-  if (!token || !action || !["accept", "reject"].includes(action)) {
+  if (!token || !action || !["accept", "reject", "cancel"].includes(action)) {
     return new NextResponse("Invalid request", { status: 400 });
   }
 
@@ -162,12 +177,14 @@ export async function POST(req: NextRequest) {
 
   const clicked = payload.actions[0];
   const token = clicked?.value ?? "";
-  const action: "accept" | "reject" | null =
+  const action: "accept" | "reject" | "cancel" | null =
     clicked?.action_id === "approve_interview"
       ? "accept"
       : clicked?.action_id === "reject_interview"
         ? "reject"
-        : null;
+        : clicked?.action_id === "cancel_interview"
+          ? "cancel"
+          : null;
 
   if (!token || !action) {
     return NextResponse.json({ ok: true });
@@ -180,6 +197,7 @@ export async function POST(req: NextRequest) {
       const messages: Record<string, string> = {
         approved: "✅ Approved — the candidate is being invited to confirm the time.",
         rejected: "❌ Declined — proposing the next available time.",
+        cancelled: "🚫 Cancelled — proposing the next available time.",
         expired: "⚠️ This request has expired.",
         already: "This request was already handled.",
       };
