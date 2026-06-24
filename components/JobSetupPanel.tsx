@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { formatSlotRange, localDayKey } from "@/lib/dates";
 import { ExportCsvButton } from "@/components/ExportCsvButton";
@@ -790,6 +791,7 @@ export function JobSetupPanel({
   onEngageResult?: (r: { autoEnqueued?: number; threshold?: number }) => void;
 }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [expanded, setExpanded] = useState(false);
   const [tab, setTab] = useState<Tab>("apply");
 
@@ -947,7 +949,14 @@ export function JobSetupPanel({
   }
 
   async function regenerateInvite() {
-    if (!confirm("Generate a new link? The old one stops working immediately.")) return;
+    if (
+      !(await confirm("Generate a new link? The old one stops working immediately.", {
+        title: "Regenerate apply link",
+        confirmLabel: "Regenerate",
+        variant: "danger",
+      }))
+    )
+      return;
     setRegenerating(true);
     try {
       const res = await fetch(`/api/jobs/${jobId}/invite`, {
@@ -998,7 +1007,14 @@ export function JobSetupPanel({
   }
 
   async function removeInterviewer(id: string, name: string) {
-    if (!confirm(`Remove ${name}?`)) return;
+    if (
+      !(await confirm(`Remove ${name}?`, {
+        title: "Remove interviewer",
+        confirmLabel: "Remove",
+        variant: "danger",
+      }))
+    )
+      return;
     await fetch(`/api/jobs/${jobId}/interviewers/${id}`, { method: "DELETE" });
     await loadTeam();
   }

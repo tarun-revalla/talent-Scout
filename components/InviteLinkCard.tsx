@@ -16,6 +16,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/cn";
 
 interface InviteAnalytics {
@@ -79,6 +80,7 @@ function FunnelStep({
 
 export function InviteLinkCard({ jobId }: { jobId: string }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [data, setData] = useState<InviteData | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -113,7 +115,14 @@ export function InviteLinkCard({ jobId }: { jobId: string }) {
 
   async function regenerate(e: React.MouseEvent) {
     e.stopPropagation();
-    if (!confirm("Regenerate invite link? The old link will stop working immediately.")) return;
+    if (
+      !(await confirm("Regenerate invite link? The old link will stop working immediately.", {
+        title: "Regenerate invite link",
+        confirmLabel: "Regenerate",
+        variant: "danger",
+      }))
+    )
+      return;
     setRegenerating(true);
     try {
       const res = await fetch(`/api/jobs/${jobId}/invite`, {

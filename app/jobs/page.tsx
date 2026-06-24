@@ -5,6 +5,7 @@ import { LayoutGrid, List } from "lucide-react";
 import { JobsFiltersSidebar } from "@/components/JobsFiltersSidebar";
 import { JobPostingCard, type JobPostingRow } from "@/components/JobPostingCard";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { JobDigestPanel } from "@/components/JobDigestPanel";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -23,6 +24,7 @@ const CACHE_TTL_MS = 45_000;
 
 export default function JobsPage() {
   const toast = useToast();
+  const confirm = useConfirm();
   const [jobs, setJobs] = useState<JobPostingRow[]>(() => readRouteCache(CACHE_KEY) ?? []);
   const [loading, setLoading] = useState(() => readRouteCache(CACHE_KEY) == null);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +46,7 @@ export default function JobsPage() {
       writeRouteCache(CACHE_KEY, list);
       setJobs(list);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown");
+      setError(e instanceof Error ? e.message : "Failed to load jobs");
     } finally {
       setLoading(false);
     }
@@ -90,9 +92,14 @@ export default function JobsPage() {
 
   async function handleDelete(j: JobPostingRow) {
     if (
-      !confirm(
+      !(await confirm(
         `Delete "${j.title}"? All matches and email transcripts for this job will be deleted.`,
-      )
+        {
+          title: "Delete job",
+          confirmLabel: "Delete",
+          variant: "danger",
+        },
+      ))
     )
       return;
     setJobs((prev) => prev.filter((x) => x.id !== j.id));
@@ -109,7 +116,7 @@ export default function JobsPage() {
   return (
     <PageShell>
       {error && (
-        <Alert variant="warning" title="Database not ready" className="mb-8">
+        <Alert variant="warning" title="Couldn't load jobs" className="mb-8">
           {error}
         </Alert>
       )}
@@ -183,17 +190,7 @@ export default function JobsPage() {
                   />
                 ))}
 
-              {!loading && jobs.length === 0 && (
-                <AddMoreCard
-                  href="/jobs/new"
-                  title="Ready for more?"
-                  description="Add your next job description to start sourcing world-class talent with AI-powered scoring."
-                  cta="Upload a JD"
-                  className={view === "grid" ? "col-span-full" : ""}
-                />
-              )}
-
-              {!loading && jobs.length > 0 && (
+              {!loading && (
                 <AddMoreCard
                   href="/jobs/new"
                   title="Ready for more?"

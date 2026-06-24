@@ -7,6 +7,7 @@ import { SkeletonRow, SkeletonCard } from "./Skeleton";
 import { EmptyState } from "./EmptyState";
 import { formatLocalShort } from "@/lib/dates";
 import { ExpandableSkillChips } from "./ExpandableSkillChips";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 export interface CandidateRow {
   id: string;
@@ -51,6 +52,7 @@ export function CandidateTable({
   onRowClick?: (row: CandidateRow) => void;
   showUploadHint?: boolean;
 }) {
+  const confirm = useConfirm();
   const isDashboard = variant === "dashboard";
   const skillChipClass = isDashboard
     ? "px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-xs text-slate-600"
@@ -345,13 +347,20 @@ export function CandidateTable({
                       {onDelete && (
                         <button
                           onClick={() => {
-                            if (
-                              confirm(
-                                `Delete ${c.name ?? "this candidate"} from the pool? They will be removed from every job too.`,
-                              )
-                            ) {
-                              onDelete(c.id, c.name);
-                            }
+                            void (async () => {
+                              if (
+                                await confirm(
+                                  `Delete ${c.name ?? "this candidate"} from the pool? They will be removed from every job too.`,
+                                  {
+                                    title: "Delete candidate",
+                                    confirmLabel: "Delete",
+                                    variant: "danger",
+                                  },
+                                )
+                              ) {
+                                onDelete(c.id, c.name);
+                              }
+                            })();
                           }}
                           aria-label="Delete candidate"
                           title="Delete from pool"
@@ -429,8 +438,17 @@ export function CandidateTable({
                   {onDelete && (
                     <button
                       onClick={() => {
-                        if (confirm(`Delete ${c.name ?? "this candidate"}?`))
-                          onDelete(c.id, c.name);
+                        void (async () => {
+                          if (
+                            await confirm(`Delete ${c.name ?? "this candidate"}?`, {
+                              title: "Delete candidate",
+                              confirmLabel: "Delete",
+                              variant: "danger",
+                            })
+                          ) {
+                            onDelete(c.id, c.name);
+                          }
+                        })();
                       }}
                       aria-label="Delete candidate"
                       className="p-1.5 rounded-md hover:bg-red-50 text-slate-400 hover:text-red-600 cursor-pointer"

@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   X,
   Mail,
-  Phone,
   CheckCircle2,
   FileText,
 } from "lucide-react";
@@ -20,6 +19,7 @@ import { STAGES } from "@/lib/ui-tokens";
 import type { MatchRow, DrawerTab as Tab } from "./MatchTable";
 import { ExpandableSkillChips } from "./ExpandableSkillChips";
 import { InterviewProgress } from "./InterviewProgress";
+import { InterviewConsensus } from "./InterviewConsensus";
 import { ScheduleInterviewModal } from "./ScheduleInterviewModal";
 import type { InterviewRound, ManualMessageIntent } from "@/lib/schemas";
 
@@ -171,7 +171,7 @@ export function CandidateDrawer({
 
       {/* Tabs */}
       <div className="flex items-center gap-6 px-4 border-b border-slate-200 shrink-0">
-        {(["overview", "activity"] as Tab[]).map((t) => (
+        {(["overview", "activity", "feedback"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -181,7 +181,7 @@ export function CandidateDrawer({
                 : "text-slate-500 hover:text-slate-900"
             }`}
           >
-            {t}
+            {t === "feedback" ? "Panel" : t}
             {tab === t && (
               <motion.span
                 layoutId="drawer-tab-underline"
@@ -214,9 +214,6 @@ export function CandidateDrawer({
                       <Mail className="w-3.5 h-3.5" />
                     </a>
                   )}
-                  <span aria-label="Phone (not available)" className="p-1 opacity-40">
-                    <Phone className="w-3.5 h-3.5" />
-                  </span>
                 </div>
               </div>
             </div>
@@ -386,6 +383,10 @@ export function CandidateDrawer({
               }}
             />
           </div>
+        )}
+
+        {tab === "feedback" && (
+          <InterviewConsensus matchId={match.id} />
         )}
       </div>
 

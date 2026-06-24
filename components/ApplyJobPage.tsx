@@ -53,6 +53,7 @@ export function ApplyJobPage({ token }: ApplyJobPageProps) {
   const [linkedin, setLinkedin] = useState("");
   const [coverNote, setCoverNote] = useState("");
   const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [resumeDrag, setResumeDrag] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +83,24 @@ export function ApplyJobPage({ token }: ApplyJobPageProps) {
     trackEvent(token, "started");
   }, [token]);
 
+  const acceptResume = useCallback(
+    (file: File | null) => {
+      if (!file) return;
+      if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+        setFormError("Please upload a PDF resume.");
+        return;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        setFormError("Resume must be 20 MB or smaller.");
+        return;
+      }
+      setFormError(null);
+      setResumeFile(file);
+      markStarted();
+    },
+    [markStarted],
+  );
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!job?.acceptingApplications || !resumeFile) return;
@@ -99,6 +118,7 @@ export function ApplyJobPage({ token }: ApplyJobPageProps) {
       const res = await fetch(`/api/apply/${token}/submit`, { method: "POST", body: fd });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Submission failed");
+      trackEvent(token, "completed");
       setSubmitted(true);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Unknown error");
@@ -382,18 +402,28 @@ export function ApplyJobPage({ token }: ApplyJobPageProps) {
                       accept=".pdf,application/pdf"
                       className="hidden"
                       onChange={(e) => {
-                        markStarted();
-                        const f = e.target.files?.[0] ?? null;
-                        setResumeFile(f);
+                        acceptResume(e.target.files?.[0] ?? null);
                       }}
                     />
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setResumeDrag(true);
+                      }}
+                      onDragLeave={() => setResumeDrag(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setResumeDrag(false);
+                        acceptResume(e.dataTransfer.files?.[0] ?? null);
+                      }}
                       className={`flex w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-8 transition ${
                         resumeFile
                           ? "border-emerald-300 bg-emerald-50/50"
-                          : "border-slate-200 bg-slate-50/50 hover:border-cobalt-300 hover:bg-cobalt-50/30"
+                          : resumeDrag
+                            ? "border-cobalt-400 bg-cobalt-50/50"
+                            : "border-slate-200 bg-slate-50/50 hover:border-cobalt-300 hover:bg-cobalt-50/30"
                       }`}
                     >
                       {resumeFile ? (

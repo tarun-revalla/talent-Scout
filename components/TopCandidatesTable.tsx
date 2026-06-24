@@ -76,7 +76,6 @@ function MatchScoreBar({ value }: { value: number | null }) {
   );
 }
 
-/** Shared grid — explicit tracks keep headers aligned and prevent label overflow. */
 const TABLE_GRID =
   "grid w-full min-w-0 grid-cols-[minmax(0,1.55fr)_6.5rem_5rem_4rem_minmax(5.5rem,auto)_4.75rem] items-center gap-x-2 sm:gap-x-3 px-3 sm:px-4 lg:px-5";
 
@@ -88,6 +87,130 @@ const HEADER_NUMERIC =
 
 const BODY_COMBINED =
   "text-center text-sm font-bold tabular-nums text-slate-900 sm:text-base";
+
+function CandidateIdentity({
+  m,
+  threshold,
+  autoEnabled,
+  jobOpen,
+}: {
+  m: MatchRow;
+  threshold: number;
+  autoEnabled: boolean;
+  jobOpen: boolean;
+}) {
+  const c = m.candidate;
+  return (
+    <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
+      <Avatar name={c?.name} size="md" />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <p className="min-w-0 truncate font-bold text-slate-900 text-sm sm:text-base">
+            {c?.name ?? "—"}
+          </p>
+          {c?.source === "invite_link" && (
+            <span className="shrink-0 rounded-md bg-sky-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700 ring-1 ring-sky-100">
+              Applied
+            </span>
+          )}
+          <AutoEngageStatusIcon
+            matchScore={m.match_score}
+            threshold={threshold}
+            autoEnabled={autoEnabled}
+            jobOpen={jobOpen}
+            hasEmail={!!c?.email}
+            emailInvalid={c?.email_invalid}
+            status={m.status}
+            interviewState={m.interview_state}
+            reEligibleAfter={m.re_eligible_after}
+          />
+        </div>
+        <p className="truncate text-[11px] text-slate-500 sm:text-xs">
+          {c?.email ? (
+            <span className={c.email_invalid ? "line-through" : ""}>{c.email}</span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-amber-700">
+              <AlertCircle className="w-3 h-3 shrink-0" /> no email
+            </span>
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function MobileCandidateCard({
+  m,
+  combined,
+  threshold,
+  autoEnabled,
+  jobOpen,
+  onOpen,
+}: {
+  m: MatchRow;
+  combined: number | null;
+  threshold: number;
+  autoEnabled: boolean;
+  jobOpen: boolean;
+  onOpen: () => void;
+}) {
+  const c = m.candidate;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="md:hidden px-4 py-4 text-left hover:bg-slate-50 transition-colors cursor-pointer"
+    >
+      <CandidateIdentity
+        m={m}
+        threshold={threshold}
+        autoEnabled={autoEnabled}
+        jobOpen={jobOpen}
+      />
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-slate-400">Match</p>
+          <div className="mt-1 flex justify-center">
+            <MatchScoreBar value={m.match_score} />
+          </div>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-slate-400">Interest</p>
+          <div className="mt-1 flex justify-center">
+            <CircularScore value={m.interest_score} size="sm" />
+          </div>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-slate-400">Combined</p>
+          <p className="mt-1 text-sm font-bold tabular-nums text-slate-900">{combined ?? "—"}</p>
+        </div>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span
+          className={`truncate rounded-full px-2 py-1 text-[10px] font-semibold ${statusBadgeClass(
+            m.status,
+            m.interview_state,
+            m.current_round_index,
+          )}`}
+        >
+          {statusLabel(m.status, m.interview_state, m.current_round_index)}
+        </span>
+        {(c?.source === "pdf" || c?.source === "invite_link") && c && (
+          <div onClick={(e) => e.stopPropagation()}>
+            <ResumeButton candidateId={c.id} candidateName={c.name} compact />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function TopCandidatesTable({
   rows,
@@ -131,15 +254,25 @@ export function TopCandidatesTable({
 
   if (loading) {
     return (
-      <div className="hidden md:block">
-        <table className="w-full text-sm">
-          <tbody>
-            {Array.from({ length: 5 }).map((_, i) => (
-              <SkeletonRow key={i} cols={5} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <>
+        <div className="md:hidden divide-y divide-slate-200">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="px-4 py-4 animate-pulse space-y-3">
+              <div className="h-10 rounded-lg bg-slate-100" />
+              <div className="h-8 rounded-lg bg-slate-100" />
+            </div>
+          ))}
+        </div>
+        <div className="hidden md:block">
+          <table className="w-full text-sm">
+            <tbody>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <SkeletonRow key={i} cols={5} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>
     );
   }
 
@@ -172,86 +305,60 @@ export function TopCandidatesTable({
           const combined = combinedScore(m, weights);
           const openCandidate = () => onOpenCandidate(m.id);
           return (
-            <div
-              key={m.id}
-              role="button"
-              tabIndex={0}
-              onClick={openCandidate}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  openCandidate();
-                }
-              }}
-              style={{ "--i": Math.min(idx, 8) } as React.CSSProperties}
-              className={`${TABLE_GRID} hidden md:grid stagger py-3 text-left hover:bg-slate-50 transition-colors cursor-pointer`}
-            >
-              <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
-                <Avatar name={c?.name} size="md" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <p className="min-w-0 truncate font-bold text-slate-900 text-sm sm:text-base">
-                      {c?.name ?? "—"}
-                    </p>
-                    {c?.source === "invite_link" && (
-                      <span className="shrink-0 rounded-md bg-sky-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700 ring-1 ring-sky-100">
-                        Applied
-                      </span>
-                    )}
-                    <AutoEngageStatusIcon
-                      matchScore={m.match_score}
-                      threshold={threshold}
-                      autoEnabled={autoEnabled}
-                      jobOpen={jobOpen}
-                      hasEmail={!!c?.email}
-                      emailInvalid={c?.email_invalid}
-                      status={m.status}
-                      interviewState={m.interview_state}
-                      reEligibleAfter={m.re_eligible_after}
-                    />
-                  </div>
-                  <p className="truncate text-[11px] text-slate-500 sm:text-xs">
-                    {c?.email ? (
-                      <span className={c.email_invalid ? "line-through" : ""}>
-                        {c.email}
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-amber-700">
-                        <AlertCircle className="w-3 h-3 shrink-0" /> no email
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
-              <div className="min-w-0">
-                <MatchScoreBar value={m.match_score} />
-              </div>
-              <div className="flex justify-center">
-                <CircularScore value={m.interest_score} size="sm" />
-              </div>
-              <div className={BODY_COMBINED}>{combined ?? "—"}</div>
-              <div className="flex min-w-0 justify-center">
-                <span
-                  className={`max-w-full truncate rounded-full px-2 py-1 text-[10px] font-semibold sm:px-2.5 sm:py-1 sm:text-xs ${statusBadgeClass(
-                    m.status,
-                    m.interview_state,
-                    m.current_round_index,
-                  )}`}
-                >
-                  {statusLabel(m.status, m.interview_state, m.current_round_index)}
-                </span>
-              </div>
+            <div key={m.id}>
+              <MobileCandidateCard
+                m={m}
+                combined={combined}
+                threshold={threshold}
+                autoEnabled={autoEnabled}
+                jobOpen={jobOpen}
+                onOpen={openCandidate}
+              />
               <div
-                className="flex justify-center"
-                onClick={(e) => e.stopPropagation()}
+                role="button"
+                tabIndex={0}
+                onClick={openCandidate}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openCandidate();
+                  }
+                }}
+                style={{ "--i": Math.min(idx, 8) } as React.CSSProperties}
+                className={`${TABLE_GRID} hidden md:grid stagger py-3 text-left hover:bg-slate-50 transition-colors cursor-pointer`}
               >
-                {(c?.source === "pdf" || c?.source === "invite_link") && (
-                  <ResumeButton
-                    candidateId={c.id}
-                    candidateName={c.name}
-                    compact
-                  />
-                )}
+                <CandidateIdentity
+                  m={m}
+                  threshold={threshold}
+                  autoEnabled={autoEnabled}
+                  jobOpen={jobOpen}
+                />
+                <div className="min-w-0">
+                  <MatchScoreBar value={m.match_score} />
+                </div>
+                <div className="flex justify-center">
+                  <CircularScore value={m.interest_score} size="sm" />
+                </div>
+                <div className={BODY_COMBINED}>{combined ?? "—"}</div>
+                <div className="flex min-w-0 justify-center">
+                  <span
+                    className={`max-w-full truncate rounded-full px-2 py-1 text-[10px] font-semibold sm:px-2.5 sm:py-1 sm:text-xs ${statusBadgeClass(
+                      m.status,
+                      m.interview_state,
+                      m.current_round_index,
+                    )}`}
+                  >
+                    {statusLabel(m.status, m.interview_state, m.current_round_index)}
+                  </span>
+                </div>
+                <div
+                  className="flex justify-center"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {(c?.source === "pdf" || c?.source === "invite_link") && c && (
+                    <ResumeButton candidateId={c.id} candidateName={c.name} compact />
+                  )}
+                </div>
               </div>
             </div>
           );

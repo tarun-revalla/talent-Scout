@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { AnimatePresence } from "motion/react";
 import { LayoutGrid, List, RefreshCw } from "lucide-react";
 import { UploadDropzone } from "@/components/UploadDropzone";
@@ -10,6 +11,8 @@ import { DuplicatesModal, type DuplicatePair } from "@/components/DuplicatesModa
 import { Pagination } from "@/components/Pagination";
 import { BulkActionBar } from "@/components/BulkActionBar";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { Alert } from "@/components/ui/Alert";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ViewToggle } from "@/components/ui/ViewToggle";
@@ -22,9 +25,20 @@ const CACHE_KEY = "candidates-list";
 const CACHE_TTL_MS = 45_000;
 
 export default function CandidatesPage() {
+  return (
+    <Suspense fallback={null}>
+      <CandidatesPageContent />
+    </Suspense>
+  );
+}
+
+function CandidatesPageContent() {
+  const searchParams = useSearchParams();
   const toast = useToast();
+  const confirm = useConfirm();
   const [rows, setRows] = useState<CandidateRow[]>(() => readRouteCache(CACHE_KEY) ?? []);
   const [loading, setLoading] = useState(() => readRouteCache(CACHE_KEY) == null);
+  const [error, setError] = useState<string | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicatePair[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -37,14 +51,16 @@ export default function CandidatesPage() {
     if (!force && isRouteCacheFresh(CACHE_KEY, CACHE_TTL_MS)) return;
     const hasCached = readRouteCache(CACHE_KEY) != null;
     if (!hasCached) setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/candidates", { cache: "no-store" });
       const json = await res.json();
-      if (res.ok) {
-        const list = json.candidates ?? [];
-        writeRouteCache(CACHE_KEY, list);
-        setRows(list);
-      }
+      if (!res.ok) throw new Error(json.error ?? "Failed to load candidates");
+      const list = json.candidates ?? [];
+      writeRouteCache(CACHE_KEY, list);
+      setRows(list);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load candidates");
     } finally {
       setLoading(false);
     }
@@ -53,6 +69,13 @@ export default function CandidatesPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const focusId = searchParams.get("focus");
+    if (!focusId || loading || rows.length === 0) return;
+    const row = rows.find((r) => r.id === focusId);
+    if (row) setActiveCandidate(row);
+  }, [searchParams, rows, loading]);
 
   useEffect(() => {
     const sb = supabaseBrowser();
@@ -108,7 +131,14 @@ export default function CandidatesPage() {
   async function bulkDelete() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    if (!confirm(`Delete ${ids.length} candidate(s) permanently?`)) return;
+    if (
+      !(await confirm(`Delete ${ids.length} candidate(s) permanently?`, {
+        title: "Delete candidates",
+        confirmLabel: "Delete",
+        variant: "danger",
+      }))
+    )
+      return;
     setBulkBusy(true);
     setRows((rs) => rs.filter((r) => !selected.has(r.id)));
     setSelected(new Set());
@@ -180,6 +210,12 @@ export default function CandidatesPage() {
         title="Candidates"
         description="Upload resumes (PDF, CSV, JSON or ZIP). New candidates are auto-matched against all open jobs. Pipeline stages live on each job's match list."
       />
+
+      {error && (
+        <Alert variant="error" className="mb-6">
+          {error}
+        </Alert>
+      )}
 
       <section className="mb-8">
         <UploadDropzone

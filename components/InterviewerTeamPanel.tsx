@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import type { InterviewRound } from "@/lib/schemas";
 
@@ -50,6 +51,7 @@ export function InterviewerTeamPanel({
   jobRounds?: InterviewRound[];
 }) {
   const toast = useToast();
+  const confirm = useConfirm();
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -171,7 +173,14 @@ export function InterviewerTeamPanel({
   }
 
   async function remove(id: string, name: string) {
-    if (!confirm(`Remove ${name} from this job?`)) return;
+    if (
+      !(await confirm(`Remove ${name} from this job?`, {
+        title: "Remove interviewer",
+        confirmLabel: "Remove",
+        variant: "danger",
+      }))
+    )
+      return;
     const res = await fetch(`/api/jobs/${jobId}/interviewers/${id}`, { method: "DELETE" });
     if (res.ok) {
       toast(`${name} removed`, "success");

@@ -1,27 +1,40 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, AlertCircle } from "lucide-react";
+import { ArrowLeft, AlertCircle, GitCompareArrows } from "lucide-react";
 import { CandidateComparison } from "@/components/CandidateComparison";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
+import { LoadingSpinner } from "@/components/ui/LoadingState";
 import { useToast } from "@/components/Toast";
+
+const MAX_COMPARE = 5;
+const MIN_COMPARE = 2;
 
 interface Match {
   id: string;
   candidate_id: string;
   candidate: { name: string } | null;
-  match_score: number;
-  interest_score: number;
-  pipeline_stage: string;
+  match_score: number | null;
+  interest_score: number | null;
+  pipeline_stage: string | null;
+  interview_state: string | null;
 }
 
 interface Job {
   id: string;
   title: string;
+}
+
+function isCompareCandidate(m: Match): boolean {
+  const stage = m.pipeline_stage ?? "new";
+  const interview = m.interview_state ?? "not_started";
+  if (["shortlisted", "contacted", "archived"].includes(stage)) return true;
+  if (["in_progress", "hired"].includes(interview)) return true;
+  return false;
 }
 
 export default function ComparePage() {
@@ -35,109 +48,133 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [comparing, setComparing] = useState(false);
 
-  // Fetch job and matches
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/jobs/${jobId}`);
+        const res = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error ?? "Failed to load job");
         setJob(json.job);
 
-        // Fetch matches for this job (filter to contacted/archived stage - final candidates)
-        const matchRes = await fetch(`/api/jobs/${jobId}/matches?stage=contacted,archived`);
+        const matchRes = await fetch(`/api/jobs/${jobId}/matches`, { cache: "no-store" });
         const matchJson = await matchRes.json();
         if (!matchRes.ok) throw new Error(matchJson.error ?? "Failed to load candidates");
-        setMatches(matchJson.matches ?? []);
+        const all = (matchJson.matches ?? []) as Match[];
+        setMatches(all.filter(isCompareCandidate));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Unknown error");
       } finally {
         setLoading(false);
       }
     };
-    fetchData();
+    void fetchData();
   }, [jobId]);
 
-  const toggleCandidate = useCallback((matchId: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(matchId)) {
-        next.delete(matchId);
-      } else {
+  const toggleCandidate = useCallback(
+    (matchId: string) => {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(matchId)) {
+          next.delete(matchId);
+          return next;
+        }
+        if (next.size >= MAX_COMPARE) {
+          toast(`Select at most ${MAX_COMPARE} candidates`, "info");
+          return prev;
+        }
         next.add(matchId);
-      }
-      return next;
-    });
-  }, []);
+        return next;
+      });
+    },
+    [toast],
+  );
 
   const selectAll = useCallback(() => {
-    if (selectedIds.size === matches.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(matches.map((m) => m.id)));
-    }
-  }, [matches, selectedIds.size]);
+    setSelectedIds((prev) => {
+      if (prev.size === matches.length) return new Set();
+      return new Set(matches.slice(0, MAX_COMPARE).map((m) => m.id));
+    });
+  }, [matches]);
 
-  const hasSelection = selectedIds.size > 0;
+  const canCompare =
+    selectedIds.size >= MIN_COMPARE && selectedIds.size <= MAX_COMPARE;
 
-  if (loading) return <PageShell><div className="py-8 text-center">Loading...</div></PageShell>;
-  if (error) return (
-    <PageShell>
-      <Alert variant="warning">Error: {error}</Alert>
-    </PageShell>
-  );
-  if (!job) return (
-    <PageShell>
-      <Alert variant="warning">Job not found</Alert>
-    </PageShell>
-  );
+  if (loading) {
+    return (
+      <PageShell>
+        <LoadingSpinner label="Loading candidates…" />
+      </PageShell>
+    );
+  }
+
+  if (error) {
+    return (
+      <PageShell>
+        <Alert variant="error">{error}</Alert>
+      </PageShell>
+    );
+  }
+
+  if (!job) {
+    return (
+      <PageShell>
+        <Alert variant="warning">Job not found</Alert>
+      </PageShell>
+    );
+  }
 
   return (
     <PageShell>
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => router.back()}
+            type="button"
+            onClick={() => router.push(`/jobs/${jobId}`)}
             className="rounded p-2 hover:bg-slate-100"
+            aria-label="Back to job"
           >
             <ArrowLeft size={20} className="text-slate-600" />
           </button>
           <PageHeader
             title="Compare Candidates"
-            description={`Final round candidates for ${job.title}`}
+            description={`Side-by-side comparison for ${job.title}`}
             className="mb-0"
           />
         </div>
       </div>
 
-      {!hasSelection ? (
+      {!comparing ? (
         <div className="space-y-4">
           <Alert variant="info" className="flex items-start gap-2">
             <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
             <div>
-              Select 2–5 candidates to compare side-by-side. Compare match scores, interview ratings, interest, and build a weighted composite score.
+              Select {MIN_COMPARE}–{MAX_COMPARE} candidates to compare match scores, interview
+              ratings, and interest side-by-side.
             </div>
           </Alert>
 
           {matches.length === 0 ? (
             <Alert variant="warning">
-              No candidates in final rounds. Progress some candidates through interviews first.
+              No shortlisted or interviewed candidates yet. Shortlist candidates or progress them
+              through interviews first.
             </Alert>
           ) : (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold">
                   {matches.length} candidate{matches.length !== 1 ? "s" : ""} available
+                  {selectedIds.size > 0 && (
+                    <span className="ml-2 font-normal text-slate-500">
+                      · {selectedIds.size} selected
+                    </span>
+                  )}
                 </span>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={selectAll}
-                >
-                  {selectedIds.size === matches.length ? "Clear All" : "Select All"}
+                <Button variant="secondary" size="sm" onClick={selectAll}>
+                  {selectedIds.size === matches.length ? "Clear all" : "Select up to 5"}
                 </Button>
               </div>
 
@@ -145,42 +182,57 @@ export default function ComparePage() {
                 {matches.map((match) => (
                   <button
                     key={match.id}
+                    type="button"
                     onClick={() => toggleCandidate(match.id)}
-                    className={`rounded-lg border-2 p-4 text-left transition ${
+                    className={`rounded-lg border-2 p-4 text-left transition focus:outline-none focus:ring-2 focus:ring-cobalt-600 focus:ring-offset-2 ${
                       selectedIds.has(match.id)
-                        ? "border-blue-500 bg-blue-50"
+                        ? "border-cobalt-600 bg-cobalt-50"
                         : "border-slate-200 bg-white hover:border-slate-300"
                     }`}
                   >
                     <div className="font-semibold">{match.candidate?.name ?? "Unknown"}</div>
                     <div className="mt-2 space-y-1 text-xs text-slate-600">
-                      <div>Match: <span className="font-semibold">{match.match_score ?? 0}</span></div>
-                      <div>Interest: <span className="font-semibold">{match.interest_score ?? 0}</span></div>
-                      <div>Stage: <span className="font-semibold">{match.pipeline_stage}</span></div>
+                      <div>
+                        Match:{" "}
+                        <span className="font-semibold">{match.match_score ?? "—"}</span>
+                      </div>
+                      <div>
+                        Interest:{" "}
+                        <span className="font-semibold">{match.interest_score ?? "—"}</span>
+                      </div>
+                      <div>
+                        Stage:{" "}
+                        <span className="font-semibold capitalize">
+                          {match.pipeline_stage ?? "new"}
+                        </span>
+                      </div>
                     </div>
                   </button>
                 ))}
               </div>
 
-              {selectedIds.size >= 2 && selectedIds.size <= 5 && (
-                <div className="mt-6 flex justify-center">
-                  <Button onClick={() => {}} disabled className="opacity-50">
-                    Ready to compare {selectedIds.size} candidates
-                  </Button>
-                </div>
-              )}
+              <div className="mt-6 flex flex-col items-center gap-2">
+                <Button
+                  disabled={!canCompare}
+                  onClick={() => setComparing(true)}
+                  className="min-w-[12rem]"
+                >
+                  <GitCompareArrows className="h-4 w-4" />
+                  Compare {selectedIds.size || ""} candidate
+                  {selectedIds.size === 1 ? "" : "s"}
+                </Button>
+                {selectedIds.size === 1 && (
+                  <p className="text-xs text-slate-500">Select at least one more candidate.</p>
+                )}
+              </div>
             </div>
           )}
         </div>
       ) : (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setSelectedIds(new Set())}
-            >
-              Back to Selection
+            <Button variant="secondary" size="sm" onClick={() => setComparing(false)}>
+              Back to selection
             </Button>
             <span className="text-sm text-slate-600">
               Comparing {selectedIds.size} candidate{selectedIds.size !== 1 ? "s" : ""}
@@ -189,7 +241,7 @@ export default function ComparePage() {
           <CandidateComparison
             jobId={jobId}
             matchIds={Array.from(selectedIds)}
-            onClose={() => setSelectedIds(new Set())}
+            onClose={() => setComparing(false)}
           />
         </div>
       )}

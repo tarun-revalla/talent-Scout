@@ -6,8 +6,9 @@ import { INTERVIEW_STATE_LABEL, INTERVIEW_STATE_PILL } from "@/lib/ui-tokens";
 import { Avatar } from "./Avatar";
 import { SkeletonRow, SkeletonCard } from "./Skeleton";
 import { EmptyState } from "./EmptyState";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
-export type DrawerTab = "overview" | "activity";
+export type DrawerTab = "overview" | "activity" | "feedback";
 
 export function combinedScore(
   row: { match_score: number | null; interest_score: number | null },
@@ -130,6 +131,7 @@ export function MatchTable({
   /** When the drawer is open we hide Match / Interest columns so the table fits. */
   compact?: boolean;
 }) {
+  const confirm = useConfirm();
   // Column widths flex when the drawer is open: bars shrink, score numbers stay legible.
   const scoreColW = compact ? "w-28" : "w-44";
   const actionsColW = compact ? "w-20" : "w-28";
@@ -326,13 +328,20 @@ export function MatchTable({
                         {onDelete && (
                           <button
                             onClick={() => {
-                              if (
-                                confirm(
-                                  `Remove ${c?.name ?? "this candidate"} from this job?`,
-                                )
-                              ) {
-                                onDelete(m.id, c?.name ?? null);
-                              }
+                              void (async () => {
+                                if (
+                                  await confirm(
+                                    `Remove ${c?.name ?? "this candidate"} from this job?`,
+                                    {
+                                      title: "Remove from job",
+                                      confirmLabel: "Remove",
+                                      variant: "danger",
+                                    },
+                                  )
+                                ) {
+                                  onDelete(m.id, c?.name ?? null);
+                                }
+                              })();
                             }}
                             title="Remove from this job"
                             aria-label="Remove from this job"

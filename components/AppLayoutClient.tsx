@@ -24,10 +24,13 @@ export const AppLayoutClient = memo(function AppLayoutClient({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const isPublicApply = pathname?.startsWith("/apply/");
-  const isPublicSchedule = pathname?.startsWith("/schedule/respond/");
+  const isPublicRoute =
+    pathname?.startsWith("/apply/") ||
+    pathname?.startsWith("/schedule/respond/") ||
+    pathname?.startsWith("/schedule/reschedule/") ||
+    pathname?.startsWith("/scorecard/");
 
-  if (isPublicApply || isPublicSchedule) {
+  if (isPublicRoute) {
     return <>{children}</>;
   }
 

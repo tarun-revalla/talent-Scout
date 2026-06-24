@@ -101,7 +101,16 @@ export default function NewJobPage() {
   return (
     <>
     <PageShell mainClassName="mx-auto max-w-3xl space-y-8">
-        <JobCreationStepper currentStep={stepNumber(step)} />
+        <JobCreationStepper
+          currentStep={stepNumber(step)}
+          onStepClick={(s) => {
+            if (s === 1 && step !== "jd" && !busy) setStep("jd");
+            if (s === 2 && step === "match") {
+              setStep("rounds");
+              setBusy(false);
+            }
+          }}
+        />
 
         <PageHeader
           eyebrow="Create"

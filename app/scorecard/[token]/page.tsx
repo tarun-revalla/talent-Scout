@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { CheckCircle2, Loader2, Star } from "lucide-react";
+import { BrandLogo } from "@/components/BrandLogo";
+import { Button } from "@/components/ui/Button";
+import { APP_NAME, BRAND } from "@/lib/brand";
 
 type Recommendation = "strong_yes" | "yes" | "no" | "strong_no";
 
@@ -114,97 +117,121 @@ export default function ScorecardPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
+    <div
+      className="min-h-screen flex flex-col"
+      style={{ backgroundColor: BRAND.colors.surface }}
+    >
       <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <span className="font-bold text-slate-900">Talent Scout</span>
+        <BrandLogo className="h-7" />
       </header>
 
       <main className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-lg p-6 space-y-5">
-          {loading && (
-            <div className="flex items-center justify-center gap-2 py-12 text-slate-500">
-              <Loader2 className="h-5 w-5 animate-spin" /> Loading…
-            </div>
-          )}
+        <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden">
+          <div
+            className="px-6 py-5 text-white"
+            style={{
+              background: `linear-gradient(135deg, ${BRAND.colors.primary}, ${BRAND.colors.primaryLight})`,
+            }}
+          >
+            <p className="text-xs font-bold uppercase tracking-wide text-white/80 mb-1">
+              Interview scorecard
+            </p>
+            <h1 className="text-xl font-bold">{APP_NAME}</h1>
+          </div>
 
-          {error && !loading && (
-            <div className="rounded-lg bg-red-50 border border-red-100 px-4 py-3 text-sm text-red-700">
-              {error}
-            </div>
-          )}
+          <div className="p-6 space-y-5">
+            {loading && (
+              <div className="flex items-center justify-center gap-2 py-12 text-slate-500">
+                <Loader2 className="h-5 w-5 animate-spin" /> Loading…
+              </div>
+            )}
 
-          {done && (
-            <div className="text-center py-6 space-y-3">
-              <CheckCircle2 className="h-12 w-12 text-emerald-500 mx-auto" />
-              <p className="font-semibold text-slate-900">Feedback submitted</p>
-              <p className="text-sm text-slate-600">
-                Thank you — your scorecard has been recorded.
-              </p>
-            </div>
-          )}
+            {error && !loading && (
+              <div className="rounded-lg bg-red-50 border border-red-100 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
 
-          {data && !done && !loading && (
-            <>
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                  Interview scorecard
-                </p>
-                <h1 className="text-lg font-bold text-slate-900 mt-1">
-                  {data.candidateName ?? "Candidate"}
-                </h1>
-                <p className="text-sm text-slate-500">
-                  {data.jobTitle} · {data.roundName}
+            {done && (
+              <div className="text-center py-6 space-y-3">
+                <CheckCircle2 className="h-12 w-12 text-emerald-500 mx-auto" />
+                <p className="font-semibold text-slate-900">Feedback submitted</p>
+                <p className="text-sm text-slate-600">
+                  Thank you — your scorecard has been recorded.
                 </p>
               </div>
+            )}
 
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-slate-700">Hire recommendation</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {RECOMMENDATIONS.map((r) => (
-                    <button
-                      key={r.value}
-                      type="button"
-                      onClick={() => setRecommendation(r.value)}
-                      className={`rounded-lg border px-3 py-2.5 text-sm font-medium cursor-pointer transition-colors ${
-                        recommendation === r.value
-                          ? r.tone + " ring-1"
-                          : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                      }`}
-                    >
-                      {r.label}
-                    </button>
-                  ))}
+            {data && !done && !loading && (
+              <>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                    Candidate
+                  </p>
+                  <h2 className="text-lg font-bold text-slate-900 mt-1">
+                    {data.candidateName ?? "Candidate"}
+                  </h2>
+                  <p className="text-sm text-slate-500">
+                    {data.jobTitle} · {data.roundName}
+                  </p>
                 </div>
-              </div>
 
-              <div className="space-y-3 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
-                <StarRating label="Overall" value={overall} onChange={setOverall} />
-                <StarRating label="Technical" value={technical} onChange={setTechnical} />
-                <StarRating label="Communication" value={communication} onChange={setCommunication} />
-              </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-slate-700">Hire recommendation</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {RECOMMENDATIONS.map((r) => (
+                      <button
+                        key={r.value}
+                        type="button"
+                        onClick={() => setRecommendation(r.value)}
+                        className={`rounded-lg border px-3 py-2.5 text-sm font-medium cursor-pointer transition-colors ${
+                          recommendation === r.value
+                            ? r.tone + " ring-1"
+                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-slate-700">Notes</label>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  rows={4}
-                  placeholder="Strengths, concerns, anything the team should know…"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm placeholder:text-slate-400"
-                />
-              </div>
+                <div className="space-y-3 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                  <StarRating label="Overall" value={overall} onChange={setOverall} />
+                  <StarRating label="Technical" value={technical} onChange={setTechnical} />
+                  <StarRating
+                    label="Communication"
+                    value={communication}
+                    onChange={setCommunication}
+                  />
+                </div>
 
-              <button
-                type="button"
-                disabled={busy || !recommendation}
-                onClick={() => void submit()}
-                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-cobalt-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-cobalt-700 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-              >
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                Submit feedback
-              </button>
-            </>
-          )}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-slate-700">Notes</label>
+                  <textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    rows={4}
+                    placeholder="Strengths, concerns, anything the team should know…"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm placeholder:text-slate-400 focus:border-cobalt-400 focus:outline-none focus:ring-2 focus:ring-cobalt-500/20"
+                  />
+                </div>
+
+                <Button
+                  className="w-full"
+                  disabled={busy || !recommendation}
+                  onClick={() => void submit()}
+                >
+                  {busy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-4 w-4" />
+                  )}
+                  Submit feedback
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </main>
     </div>

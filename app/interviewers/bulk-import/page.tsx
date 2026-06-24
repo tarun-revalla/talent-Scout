@@ -21,7 +21,7 @@ function BulkImportContent() {
       if (jobId) {
         router.push(`/jobs/${jobId}`);
       } else {
-        router.push("/interviewers");
+        router.push("/jobs");
       }
     }, 2000);
   }, [jobId, router]);

@@ -11,6 +11,7 @@ import {
   RefreshCw,
   ChevronRight,
   ChevronDown,
+  GitCompareArrows,
 } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { ExpandableSkillChips } from "@/components/ExpandableSkillChips";
@@ -26,6 +27,8 @@ import { EmailTemplateModal } from "@/components/EmailTemplateModal";
 import { EditRoundsModal } from "@/components/EditRoundsModal";
 import { ScorecardSummaryPanel } from "@/components/ScorecardSummaryPanel";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
 import { LoadingSpinner } from "@/components/ui/LoadingState";
 import { supabaseBrowser } from "@/lib/db";
@@ -62,6 +65,7 @@ export default function JobDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const toast = useToast();
+  const confirm = useConfirm();
   const jobCacheKey = `job-${id}`;
   const matchesCacheKey = `matches-${id}`;
   const CACHE_TTL_MS = 30_000;
@@ -327,7 +331,14 @@ export default function JobDetailPage() {
   ] as const;
 
   async function archiveJob() {
-    if (!confirm("Close this job posting? Matching and outreach will be disabled.")) return;
+    if (
+      !(await confirm("Close this job posting? Matching and outreach will be disabled.", {
+        title: "Archive job",
+        confirmLabel: "Archive",
+        variant: "danger",
+      }))
+    )
+      return;
     const res = await fetch(`/api/jobs/${id}/status`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -539,6 +550,15 @@ export default function JobDetailPage() {
                     </span>
                   </h2>
                   <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      href={`/jobs/${id}/compare`}
+                      variant="secondary"
+                      size="sm"
+                      className="shrink-0"
+                    >
+                      <GitCompareArrows className="h-4 w-4" />
+                      Compare
+                    </Button>
                     {STAGE_TABS.map((t) => (
                       <button
                         key={t.id}

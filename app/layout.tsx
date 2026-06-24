@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { ToastProvider } from "@/components/Toast";
+import { ConfirmProvider } from "@/components/ui/ConfirmDialog";
 import { AppLayoutClient } from "@/components/AppLayoutClient";
 import { APP_NAME, BRAND } from "@/lib/brand";
 
@@ -45,7 +46,9 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         <ToastProvider>
-          <AppLayoutClient>{children}</AppLayoutClient>
+          <ConfirmProvider>
+            <AppLayoutClient>{children}</AppLayoutClient>
+          </ConfirmProvider>
         </ToastProvider>
       </body>
     </html>

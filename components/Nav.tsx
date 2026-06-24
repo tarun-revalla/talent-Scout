@@ -8,7 +8,6 @@ import { motion, AnimatePresence } from "motion/react";
 import { NavSearch } from "./NavSearch";
 import { NavLink } from "./NavLink";
 import { BrandLogo } from "./BrandLogo";
-import { Avatar } from "./Avatar";
 import { Button } from "./ui/Button";
 import { IconButton } from "./ui/IconButton";
 import { APP_NAME } from "@/lib/brand";
@@ -81,7 +80,7 @@ function NavInner() {
           </div>
 
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
-            <div className="hidden w-56 lg:block xl:w-72">
+            <div className="hidden w-44 md:block lg:w-72">
               <NavSearch />
             </div>
 
@@ -94,13 +93,6 @@ function NavInner() {
               <Plus className="h-4 w-4 shrink-0" />
               <span className="hidden sm:inline">New Job</span>
             </Button>
-
-            <div
-              className="hidden h-10 w-10 rounded-full border border-slate-200/80 bg-white p-0.5 shadow-sm sm:flex"
-              aria-hidden
-            >
-              <Avatar name="Recruiter" size="md" className="h-full w-full" />
-            </div>
 
             <IconButton
               variant="ghost"
