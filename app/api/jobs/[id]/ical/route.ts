@@ -32,24 +32,7 @@ export async function GET(
     return new NextResponse("Job not found", { status: 404 });
   }
 
-  const { data: interviews, error: ivErr } = await sb
-    .from("scheduled_interviews")
-    .select(
-      `
-      id, round_index, starts_at, ends_at, ics_uid, confirmed_at,
-      match:matches (
-        id,
-        candidate:candidates ( name, email ),
-        job:jobs ( interview_rounds )
-      ),
-      session:scheduling_sessions ( interviewer_ids, duration_minutes, timezone )
-    `,
-    )
-    .eq("match_id", sb.from("matches").select("id").eq("job_id", jobId) as unknown as string)
-    .not("confirmed_at", "is", null);
-
-  // Use a join-style query for confirmed interviews for this job.
-  const { data: confirmedInterviews } = await sb
+  const { data: confirmedInterviews, error: ivErr } = await sb
     .from("scheduled_interviews")
     .select(
       `
@@ -63,9 +46,9 @@ export async function GET(
     )
     .eq("match.job_id", jobId)
     .not("confirmed_at", "is", null);
-
-  void interviews;
-  void ivErr;
+  if (ivErr) {
+    return new NextResponse(ivErr.message, { status: 500 });
+  }
 
   const events: string[] = [];
   const now = fmtIcalDate(new Date().toISOString());

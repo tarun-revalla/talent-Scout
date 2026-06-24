@@ -55,28 +55,34 @@ export async function GET(req: NextRequest) {
     return q;
   })();
 
+  const schedulingSessionSelect = jobId
+    ? "id, status, created_at, updated_at, match_id, matches!inner(job_id)"
+    : "id, status, created_at, updated_at, match_id";
   let schedulingSessionQuery = sb
     .from("scheduling_sessions")
-    .select("id, status, created_at, updated_at, match_id");
-  if (jobId) {
-    schedulingSessionQuery = schedulingSessionQuery.eq(
-      "match_id",
-      sb.from("matches").select("id").eq("job_id", jobId) as unknown as string,
-    );
-  }
+    .select(schedulingSessionSelect as string);
+  if (jobId) schedulingSessionQuery = schedulingSessionQuery.eq("matches.job_id", jobId);
 
   let confirmedInterviewQuery = sb
     .from("scheduled_interviews")
-    .select("id, confirmed_at, starts_at, prep_packet_sent_at, candidate_rescheduled_count, session_id");
+    .select(
+      (jobId
+        ? "id, confirmed_at, starts_at, prep_packet_sent_at, candidate_rescheduled_count, session_id, matches!inner(job_id)"
+        : "id, confirmed_at, starts_at, prep_packet_sent_at, candidate_rescheduled_count, session_id") as string,
+    );
+  if (jobId) confirmedInterviewQuery = confirmedInterviewQuery.eq("matches.job_id", jobId);
+
+  let inboundConversationQuery = sb
+    .from("conversations")
+    .select("direction, match_id, matches!inner(job_id)")
+    .eq("direction", "in");
+  if (jobId) inboundConversationQuery = inboundConversationQuery.eq("matches.job_id", jobId);
 
   const [matchRes, queueRes, convoRes, jobsRes, usageRes, inviteRes, schedulingRes, confirmedRes, cohortRes, sourceRes, tthRes] =
     await Promise.all([
       matchQuery,
       sb.from("outreach_queue").select("status, action"),
-      sb
-        .from("conversations")
-        .select("direction, match_id, matches!inner(job_id)")
-        .eq("direction", "in"),
+      inboundConversationQuery,
       sb.from("jobs").select("id, title, status"),
       usageQuery,
       getInviteAnalyticsAggregate(jobId ?? undefined),
@@ -119,8 +125,8 @@ export async function GET(req: NextRequest) {
   };
 
   // Scheduling analytics.
-  const sessionRows = schedulingRes.data ?? [];
-  const confirmedRows = confirmedRes.data ?? [];
+  const sessionRows = (schedulingRes.data ?? []) as unknown as Array<Record<string, unknown>>;
+  const confirmedRows = (confirmedRes.data ?? []) as unknown as Array<Record<string, unknown>>;
 
   const schedulingCounts = {
     total: sessionRows.length,

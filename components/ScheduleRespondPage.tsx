@@ -72,7 +72,6 @@ export function ScheduleRespondPage({ token }: { token: string }) {
         body: JSON.stringify({
           action,
           selectedSlotStart: action === "accept" ? selectedSlot ?? undefined : undefined,
-          origin: typeof window !== "undefined" ? window.location.origin : undefined,
         }),
       });
       const json = await res.json();

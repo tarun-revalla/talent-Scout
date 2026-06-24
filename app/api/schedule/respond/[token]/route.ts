@@ -63,7 +63,6 @@ export async function POST(
     const body = (await req.json()) as {
       action?: string;
       email?: string;
-      origin?: string;
       selectedSlotStart?: string;
     };
     if (body.action !== "accept" && body.action !== "reject") {
@@ -76,22 +75,23 @@ export async function POST(
     });
 
     const matchId = result.session.match_id;
+    const origin = req.nextUrl.origin;
 
     if (body.action === "reject" && result.nextProposal) {
       await enqueueIfAbsent(matchId, "send_slack_approval", {
         sessionId: result.session.id,
-        origin: body.origin,
+        origin,
       });
       await enqueueIfAbsent(matchId, "send_scheduling_proposal", {
         responseToken: result.nextProposal.response_token,
-        origin: body.origin,
+        origin,
       });
     }
 
     if (body.action === "accept") {
       await enqueueIfAbsent(matchId, "send_candidate_invite", {
         sessionId: result.session.id,
-        origin: body.origin,
+        origin,
       });
     }
 

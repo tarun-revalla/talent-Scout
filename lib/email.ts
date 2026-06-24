@@ -34,6 +34,8 @@ interface GmailMetadataResponse {
   };
 }
 
+const GMAIL_FETCH_TIMEOUT_MS = 30_000;
+
 function findHeader(headers: Array<{ name?: string; value?: string }> | undefined, name: string): string | null {
   const found = headers?.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value;
   return found?.trim() || null;
@@ -43,6 +45,7 @@ async function sendViaGmailApi(message: SendMailOptions): Promise<SendResult> {
   const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    signal: AbortSignal.timeout(GMAIL_FETCH_TIMEOUT_MS),
     body: new URLSearchParams({
       client_id: env.gmailClientId(),
       client_secret: env.gmailClientSecret(),
@@ -71,6 +74,7 @@ async function sendViaGmailApi(message: SendMailOptions): Promise<SendResult> {
         Authorization: `Bearer ${tokenJson.access_token}`,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(GMAIL_FETCH_TIMEOUT_MS),
       body: JSON.stringify({ raw }),
     },
   );
@@ -87,6 +91,7 @@ async function sendViaGmailApi(message: SendMailOptions): Promise<SendResult> {
       )}/messages/${encodeURIComponent(sent.id)}?format=metadata&metadataHeaders=Message-ID`,
       {
         headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+        signal: AbortSignal.timeout(GMAIL_FETCH_TIMEOUT_MS),
       },
     );
     if (metaRes.ok) {

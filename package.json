@@ -12,7 +12,7 @@
     "lint": "next lint",
     "worker": "tsx worker/src/index.ts",
     "worker:dev": "tsx --env-file=.env.local worker/src/index.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "rm -rf .next/types && tsc --noEmit --incremental false",
     "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {

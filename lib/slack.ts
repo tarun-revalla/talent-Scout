@@ -5,6 +5,8 @@ interface SlackBlock {
   [key: string]: unknown;
 }
 
+const SLACK_FETCH_TIMEOUT_MS = 15_000;
+
 /**
  * Post a message to a Slack user (DM) or channel via the Slack Web API.
  * Returns the message timestamp (ts) which can be used to update the message later.
@@ -23,6 +25,7 @@ export async function postSlackMessage(args: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(SLACK_FETCH_TIMEOUT_MS),
     body: JSON.stringify({
       channel: args.channel,
       text: args.text,
@@ -49,6 +52,7 @@ export async function postSlackThreadMessage(args: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(SLACK_FETCH_TIMEOUT_MS),
     body: JSON.stringify({
       channel: args.channel,
       thread_ts: args.threadTs,
@@ -75,6 +79,7 @@ export async function lookupSlackUserByEmail(email: string): Promise<string | nu
     {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(SLACK_FETCH_TIMEOUT_MS),
     },
   );
   const json = (await res.json()) as {
@@ -104,6 +109,7 @@ export async function updateSlackMessage(args: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    signal: AbortSignal.timeout(SLACK_FETCH_TIMEOUT_MS),
     body: JSON.stringify({
       channel: args.channel,
       ts: args.ts,
