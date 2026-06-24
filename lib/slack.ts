@@ -15,7 +15,7 @@ export async function postSlackMessage(args: {
   channel: string; // user ID (UXXXXXXX) or channel ID (CXXXXXXX)
   text: string;
   blocks?: SlackBlock[];
-}): Promise<{ ok: boolean; ts?: string; error?: string }> {
+}): Promise<{ ok: boolean; ts?: string; error?: string; errors?: string[] }> {
   const token = env.slackBotToken();
   if (!token) throw new Error("SLACK_BOT_TOKEN is not configured");
 
@@ -33,7 +33,12 @@ export async function postSlackMessage(args: {
     }),
   });
 
-  const json = (await res.json()) as { ok: boolean; ts?: string; error?: string };
+  const json = (await res.json()) as {
+    ok: boolean;
+    ts?: string;
+    error?: string;
+    errors?: string[];
+  };
   return json;
 }
 
@@ -122,12 +127,20 @@ export async function updateSlackMessage(args: {
   return json;
 }
 
+const SLACK_BUTTON_TEXT_MAX = 75;
+
+function slackButtonText(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= SLACK_BUTTON_TEXT_MAX) return trimmed;
+  return `${trimmed.slice(0, SLACK_BUTTON_TEXT_MAX - 1)}…`;
+}
+
 /** Build Block Kit blocks for an interview approval request. */
 export function buildApprovalBlocks(args: {
   candidateName: string;
   jobTitle: string;
   roundName: string;
-  slots: { start: string; label: string }[];
+  slots: { start: string; label: string; buttonLabel?: string }[];
   durationMinutes: number;
   respondUrl: string;
   responseToken: string;
@@ -165,14 +178,14 @@ export function buildApprovalBlocks(args: {
       },
     );
   } else {
-    for (const slot of slotList) {
+    slotList.forEach((slot, index) => {
       actionButtons.push({
         type: "button",
-        text: { type: "plain_text", text: slot.label },
+        text: { type: "plain_text", text: slackButtonText(slot.buttonLabel ?? slot.label) },
         value: `${args.responseToken}|${slot.start}`,
-        action_id: "approve_interview_slot",
+        action_id: `approve_interview_slot_${index}`,
       });
-    }
+    });
     actionButtons.push({
       type: "button",
       text: { type: "plain_text", text: "None work" },

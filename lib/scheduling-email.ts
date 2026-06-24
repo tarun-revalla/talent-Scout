@@ -7,6 +7,13 @@ export function formatSlotLocal(iso: string, timezone: string): string {
     .toFormat("EEE, MMM d · h:mm a");
 }
 
+/** Shorter label for Slack buttons (75 char limit). */
+export function formatSlotButtonLabel(iso: string, timezone: string): string {
+  return DateTime.fromISO(iso, { zone: "utc" })
+    .setZone(timezone)
+    .toFormat("MMM d · h:mm a");
+}
+
 export interface ProposalEmailArgs {
   interviewerName: string;
   candidateName: string | null;

@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import { ChevronUp, ChevronDown, Download } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronUp, ChevronDown, Download, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
 
@@ -41,7 +41,7 @@ type SortKey =
   | "averageTechnical"
   | "yearsExperience";
 
-export function CandidateComparison({ jobId, matchIds, onClose }: CandidateComparisonProps) {
+export function CandidateComparison({ jobId, matchIds }: CandidateComparisonProps) {
   const [candidates, setCandidates] = useState<ComparableCandidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +72,10 @@ export function CandidateComparison({ jobId, matchIds, onClose }: CandidateCompa
       setLoading(false);
     }
   }, [jobId, matchIds]);
+
+  useEffect(() => {
+    void fetchCandidates();
+  }, [fetchCandidates]);
 
   // Sort candidates
   const sorted = useMemo(() => {
@@ -164,9 +168,42 @@ export function CandidateComparison({ jobId, matchIds, onClose }: CandidateCompa
     URL.revokeObjectURL(url);
   };
 
-  if (loading) return <div className="py-8 text-center">Loading candidates...</div>;
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-16 text-slate-500">
+        <Loader2 className="h-6 w-6 animate-spin text-cobalt-600" aria-hidden />
+        <span className="text-sm font-medium">Building comparison…</span>
+      </div>
+    );
+  }
   if (error) return <Alert variant="warning">Error: {error}</Alert>;
-  if (candidates.length === 0) return <div className="py-8 text-center">No candidates to compare</div>;
+  if (candidates.length === 0) {
+    return <div className="py-8 text-center text-slate-600">No candidates to compare</div>;
+  }
+
+  const SortHeader = ({
+    label,
+    column,
+    align = "left",
+  }: {
+    label: string;
+    column: SortKey;
+    align?: "left" | "right";
+  }) => (
+    <th className={`px-4 py-3 font-semibold ${align === "right" ? "text-right" : "text-left"}`}>
+      <div className={align === "right" ? "flex justify-end" : undefined}>
+        <button
+          type="button"
+          onClick={() => handleSort(column)}
+          className="inline-flex items-center gap-1 hover:text-cobalt-600"
+        >
+          {label}
+          {sortKey === column &&
+            (sortAsc ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
+        </button>
+      </div>
+    </th>
+  );
 
   return (
     <div className="space-y-6">
@@ -239,44 +276,12 @@ export function CandidateComparison({ jobId, matchIds, onClose }: CandidateCompa
         <table className="w-full text-sm">
           <thead className="border-b border-slate-200 bg-slate-50">
             <tr>
-              <th className="px-4 py-3 text-left font-semibold">
-                <button
-                  onClick={() => handleSort("candidateName")}
-                  className="flex items-center gap-1 hover:text-blue-600"
-                >
-                  Candidate
-                  {sortKey === "candidateName" && (sortAsc ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
-                </button>
-              </th>
-              <th className="px-4 py-3 text-left font-semibold">Years</th>
-              <th className="px-4 py-3 text-right font-semibold">
-                <button
-                  onClick={() => handleSort("matchScore")}
-                  className="flex items-center justify-end gap-1 hover:text-blue-600"
-                >
-                  Match
-                  {sortKey === "matchScore" && (sortAsc ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
-                </button>
-              </th>
-              <th className="px-4 py-3 text-right font-semibold">
-                <button
-                  onClick={() => handleSort("interestScore")}
-                  className="flex items-center justify-end gap-1 hover:text-blue-600"
-                >
-                  Interest
-                  {sortKey === "interestScore" && (sortAsc ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
-                </button>
-              </th>
-              <th className="px-4 py-3 text-right font-semibold">
-                <button
-                  onClick={() => handleSort("averageOverall")}
-                  className="flex items-center justify-end gap-1 hover:text-blue-600"
-                >
-                  Rating
-                  {sortKey === "averageOverall" && (sortAsc ? <ChevronUp size={14} /> : <ChevronDown size={14} />)}
-                </button>
-              </th>
-              <th className="px-4 py-3 text-right font-semibold text-blue-600">Composite</th>
+              <SortHeader label="Candidate" column="candidateName" />
+              <SortHeader label="Years" column="yearsExperience" />
+              <SortHeader label="Match" column="matchScore" align="right" />
+              <SortHeader label="Interest" column="interestScore" align="right" />
+              <SortHeader label="Rating" column="averageOverall" align="right" />
+              <th className="px-4 py-3 text-right font-semibold text-cobalt-700">Composite</th>
             </tr>
           </thead>
           <tbody>
@@ -314,7 +319,7 @@ export function CandidateComparison({ jobId, matchIds, onClose }: CandidateCompa
                     <span className="text-slate-400">—</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-right font-bold text-blue-600">{candidate.compositeScore}</td>
+                <td className="px-4 py-3 text-right font-bold text-cobalt-700">{candidate.compositeScore}</td>
               </tr>
             ))}
           </tbody>
@@ -322,26 +327,14 @@ export function CandidateComparison({ jobId, matchIds, onClose }: CandidateCompa
       </div>
 
       {/* Actions */}
-      <div className="flex gap-2 justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm text-slate-600">
           Comparing {candidates.length} candidate{candidates.length !== 1 ? "s" : ""}
         </div>
-        <div className="flex gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleExport}
-            className="gap-1"
-          >
-            <Download size={14} />
-            Export CSV
-          </Button>
-          {onClose && (
-            <Button variant="secondary" size="sm" onClick={onClose}>
-              Close
-            </Button>
-          )}
-        </div>
+        <Button variant="secondary" size="sm" onClick={handleExport}>
+          <Download size={14} />
+          Export CSV
+        </Button>
       </div>
     </div>
   );

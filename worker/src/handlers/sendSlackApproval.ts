@@ -8,7 +8,7 @@ import {
   postSlackMessage,
   lookupSlackUserByEmail,
 } from "@/lib/slack";
-import { formatSlotLocal } from "@/lib/scheduling-email";
+import { formatSlotLocal, formatSlotButtonLabel } from "@/lib/scheduling-email";
 import { buildScheduleRespondUrl } from "@/lib/scheduling-token";
 import { env } from "@/lib/env";
 
@@ -61,6 +61,7 @@ export async function handleSendSlackApproval(job: QueueJob): Promise<void> {
   const slots = slotOptions.map((s) => ({
     start: s.start,
     label: formatSlotLocal(s.start, session.timezone),
+    buttonLabel: formatSlotButtonLabel(s.start, session.timezone),
   }));
 
   if (slots.length === 0) {
@@ -135,7 +136,15 @@ export async function handleSendSlackApproval(job: QueueJob): Promise<void> {
       slackUsersNotified.push(target);
       log.info({ target, ts: result.ts }, "send_slack_approval: sent Slack approval request");
     } else {
-      log.warn({ target, error: result.error }, "send_slack_approval: Slack API error");
+      log.warn(
+        {
+          target,
+          error: result.error,
+          errors: result.errors,
+          slotCount: slots.length,
+        },
+        "send_slack_approval: Slack API error",
+      );
     }
   }
 

@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { supabaseServer } from "@/lib/db";
+import type { ScorecardRow } from "@/lib/scorecard";
 
 export async function POST(
   req: NextRequest,
@@ -15,43 +17,54 @@ export async function POST(
       return NextResponse.json({ error: "matchIds array required" }, { status: 400 });
     }
 
-    const { supabaseServer } = await import("@/lib/db");
-    const { listScorecardsForMatch } = await import("@/lib/scorecard");
     const sb = supabaseServer();
 
-    // Fetch match data with candidate and job info
-    const { data: matches, error: matchError } = await sb
-      .from("matches")
-      .select(
-        `id, job_id, candidate_id, match_score, interest_score,
+    const [{ data: matches, error: matchError }, { data: scorecardRows, error: scError }] =
+      await Promise.all([
+        sb
+          .from("matches")
+          .select(
+            `id, job_id, candidate_id, match_score, interest_score,
          candidate:candidates ( id, name, email, parsed_profile ),
          job:jobs ( id, title )`,
-      )
-      .eq("job_id", jobId)
-      .in("id", matchIds);
+          )
+          .eq("job_id", jobId)
+          .in("id", matchIds),
+        sb
+          .from("interviewer_scorecards")
+          .select("*, interviewer:interviewers ( name )")
+          .in("match_id", matchIds)
+          .order("round_index", { ascending: true })
+          .order("created_at", { ascending: true }),
+      ]);
 
     if (matchError) throw matchError;
+    if (scError) throw scError;
 
-    // Fetch scorecards for each match
-    const scorecardsMap: Record<string, any[]> = {};
-    for (const match of matches ?? []) {
-      const scorecards = await listScorecardsForMatch(match.id as string);
-      scorecardsMap[match.id as string] = scorecards;
+    const scorecardsMap: Record<string, ScorecardRow[]> = {};
+    for (const row of scorecardRows ?? []) {
+      const matchId = row.match_id as string;
+      const list = scorecardsMap[matchId] ?? [];
+      list.push(row as ScorecardRow);
+      scorecardsMap[matchId] = list;
     }
 
-    // Build comparison data
+    const avg = (vals: (number | null | undefined)[]): number | null => {
+      const nums = vals.filter((v): v is number => typeof v === "number");
+      if (nums.length === 0) return null;
+      return Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10;
+    };
+
     const comparables = (matches ?? []).map((m) => {
       const cand = Array.isArray(m.candidate) ? m.candidate[0] : m.candidate;
-      const profile = cand?.parsed_profile as any;
+      const profile = cand?.parsed_profile as {
+        skills?: string[];
+        years?: number | null;
+        years_experience?: number | null;
+        education?: Array<{ school?: string; degree?: string; field?: string }>;
+      } | null;
       const scorecards = scorecardsMap[m.id as string] ?? [];
       const submitted = scorecards.filter((s) => s.status === "submitted");
-
-      // Calculate average ratings
-      const avg = (vals: (number | null)[]): number | null => {
-        const nums = vals.filter((v): v is number => typeof v === "number");
-        if (nums.length === 0) return null;
-        return Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10;
-      };
 
       return {
         matchId: m.id,
@@ -59,7 +72,7 @@ export async function POST(
         candidateName: cand?.name,
         email: cand?.email,
         skills: profile?.skills ?? [],
-        yearsExperience: profile?.years_experience ?? 0,
+        yearsExperience: profile?.years ?? profile?.years_experience ?? 0,
         education: profile?.education ?? [],
         matchScore: m.match_score,
         interestScore: m.interest_score,

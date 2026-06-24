@@ -55,14 +55,14 @@ export default function ComparePage() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/jobs/${jobId}`, { cache: "no-store" });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error ?? "Failed to load job");
-        setJob(json.job);
-
-        const matchRes = await fetch(`/api/jobs/${jobId}/matches`, { cache: "no-store" });
-        const matchJson = await matchRes.json();
+        const [jobRes, matchRes] = await Promise.all([
+          fetch(`/api/jobs/${jobId}`, { cache: "no-store" }),
+          fetch(`/api/jobs/${jobId}/matches`, { cache: "no-store" }),
+        ]);
+        const [json, matchJson] = await Promise.all([jobRes.json(), matchRes.json()]);
+        if (!jobRes.ok) throw new Error(json.error ?? "Failed to load job");
         if (!matchRes.ok) throw new Error(matchJson.error ?? "Failed to load candidates");
+        setJob(json.job);
         const all = (matchJson.matches ?? []) as Match[];
         setMatches(all.filter(isCompareCandidate));
       } catch (e) {
@@ -211,38 +211,41 @@ export default function ComparePage() {
                 ))}
               </div>
 
-              <div className="mt-6 flex flex-col items-center gap-2">
-                <Button
-                  disabled={!canCompare}
-                  onClick={() => setComparing(true)}
-                  className="min-w-[12rem]"
-                >
-                  <GitCompareArrows className="h-4 w-4" />
-                  Compare {selectedIds.size || ""} candidate
-                  {selectedIds.size === 1 ? "" : "s"}
-                </Button>
-                {selectedIds.size === 1 && (
-                  <p className="text-xs text-slate-500">Select at least one more candidate.</p>
-                )}
+              <div className="sticky bottom-0 -mx-1 border-t border-slate-200 bg-white/95 px-1 py-4 backdrop-blur-sm">
+                <div className="flex flex-col items-center gap-2">
+                  <Button
+                    disabled={!canCompare}
+                    onClick={() => setComparing(true)}
+                    className="w-full max-w-xs"
+                  >
+                    <GitCompareArrows className="h-4 w-4 shrink-0" />
+                    Compare {selectedIds.size > 0 ? selectedIds.size : ""} candidate
+                    {selectedIds.size === 1 ? "" : "s"}
+                  </Button>
+                  {selectedIds.size === 1 && (
+                    <p className="text-xs text-slate-500">Select at least one more candidate.</p>
+                  )}
+                  {selectedIds.size === 0 && (
+                    <p className="text-xs text-slate-500">
+                      Pick {MIN_COMPARE}–{MAX_COMPARE} candidates above.
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
           )}
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <Button variant="secondary" size="sm" onClick={() => setComparing(false)}>
-              Back to selection
+              ← Back to selection
             </Button>
             <span className="text-sm text-slate-600">
               Comparing {selectedIds.size} candidate{selectedIds.size !== 1 ? "s" : ""}
             </span>
           </div>
-          <CandidateComparison
-            jobId={jobId}
-            matchIds={Array.from(selectedIds)}
-            onClose={() => setComparing(false)}
-          />
+          <CandidateComparison jobId={jobId} matchIds={Array.from(selectedIds)} />
         </div>
       )}
     </PageShell>

@@ -243,7 +243,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  if (clicked?.action_id === "approve_interview_slot" && token.includes("|")) {
+  if (
+    (clicked?.action_id === "approve_interview_slot" ||
+      clicked?.action_id?.startsWith("approve_interview_slot_")) &&
+    token.includes("|")
+  ) {
     const [proposalToken, slotStart] = token.split("|", 2);
     token = proposalToken ?? "";
     selectedSlotStart = slotStart;
@@ -254,7 +258,9 @@ export async function POST(req: NextRequest) {
   }
 
   const action: "accept" | "reject" | "cancel" | null =
-    clicked?.action_id === "approve_interview" || clicked?.action_id === "approve_interview_slot"
+    clicked?.action_id === "approve_interview" ||
+    clicked?.action_id === "approve_interview_slot" ||
+    clicked?.action_id?.startsWith("approve_interview_slot_")
       ? "accept"
       : clicked?.action_id === "reject_interview"
         ? "reject"

@@ -54,9 +54,11 @@ describe("slack", () => {
 
     assert.equal(actions.length, 4);
     assert.equal(
-      actions.filter((action) => action.action_id === "approve_interview_slot").length,
+      actions.filter((action) => String(action.action_id).startsWith("approve_interview_slot_")).length,
       3,
     );
+    const actionIds = actions.map((action) => action.action_id as string);
+    assert.equal(new Set(actionIds).size, actionIds.length, "action_ids must be unique within blocks");
     assert.ok(actions.some((action) => action.action_id === "reject_interview"));
     assert.ok(
       actions.every((action) => action.url == null),
