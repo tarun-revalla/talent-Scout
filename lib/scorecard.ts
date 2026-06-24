@@ -1,6 +1,7 @@
 import { supabaseServer } from "./db";
 import { generateSchedulingToken } from "./scheduling-token";
 import { listInterviewers } from "./interviewers";
+import { log } from "./logger";
 
 export type ScorecardRecommendation = "strong_yes" | "yes" | "no" | "strong_no";
 export type ScorecardStatus = "pending" | "submitted" | "expired";
@@ -34,8 +35,68 @@ export function buildScorecardUrl(token: string, origin?: string): string {
 }
 
 /**
+ * Interviewers who actually conducted a confirmed session for this round.
+ * scheduling_sessions.round_index is 1-based (matches match.current_round_index).
+ */
+async function getPanelInterviewerIdsForRound(
+  matchId: string,
+  roundIndex1Based: number,
+): Promise<string[]> {
+  const sb = supabaseServer();
+  const { data: session } = await sb
+    .from("scheduling_sessions")
+    .select("interviewer_ids")
+    .eq("match_id", matchId)
+    .eq("round_index", roundIndex1Based)
+    .eq("status", "confirmed")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const ids = session?.interviewer_ids;
+  return Array.isArray(ids) ? (ids as string[]) : [];
+}
+
+async function insertScorecardIfMissing(
+  matchId: string,
+  roundIndex1Based: number,
+  interviewerId: string,
+): Promise<ScorecardRow | null> {
+  const sb = supabaseServer();
+  const { data: existing } = await sb
+    .from("interviewer_scorecards")
+    .select("*")
+    .eq("match_id", matchId)
+    .eq("round_index", roundIndex1Based)
+    .eq("interviewer_id", interviewerId)
+    .maybeSingle();
+  if (existing) return null;
+
+  const token = generateSchedulingToken();
+  const { data, error } = await sb
+    .from("interviewer_scorecards")
+    .insert({
+      match_id: matchId,
+      round_index: roundIndex1Based,
+      interviewer_id: interviewerId,
+      response_token: token,
+      status: "pending",
+    })
+    .select("*")
+    .single();
+  if (error) {
+    log.warn(
+      { matchId, roundIndex: roundIndex1Based, interviewerId, err: error.message },
+      "scorecard: insert failed",
+    );
+    return null;
+  }
+  return data as ScorecardRow;
+}
+
+/**
  * Create scorecard rows for every interviewer assigned to a round (round_index
  * stored 1-based; interviewers use 0-based round_index, null = all rounds).
+ * Also includes interviewers on the confirmed scheduling panel for this round.
  * Idempotent: existing rows for (match, round, interviewer) are left untouched.
  * Returns the rows that were freshly created (so callers can email only those).
  */
@@ -44,43 +105,41 @@ export async function createScorecardsForRound(
   jobId: string,
   roundIndex1Based: number,
 ): Promise<ScorecardRow[]> {
-  const sb = supabaseServer();
   const interviewers = await listInterviewers(jobId);
   const zeroBased = roundIndex1Based - 1;
   const relevant = interviewers.filter(
     (iv) => iv.round_index === null || iv.round_index === zeroBased,
   );
 
-  const created: ScorecardRow[] = [];
-  for (const iv of relevant) {
-    const { data: existing } = await sb
-      .from("interviewer_scorecards")
-      .select("id")
-      .eq("match_id", matchId)
-      .eq("round_index", roundIndex1Based)
-      .eq("interviewer_id", iv.id)
-      .maybeSingle();
-    if (existing) continue;
+  const panelIds = await getPanelInterviewerIdsForRound(matchId, roundIndex1Based);
+  const byId = new Map(interviewers.map((iv) => [iv.id, iv]));
+  const targetIds = new Set<string>([
+    ...relevant.map((iv) => iv.id),
+    ...panelIds.filter((id) => byId.has(id)),
+  ]);
 
-    const token = generateSchedulingToken();
-    const { data, error } = await sb
-      .from("interviewer_scorecards")
-      .insert({
-        match_id: matchId,
-        round_index: roundIndex1Based,
-        interviewer_id: iv.id,
-        response_token: token,
-        status: "pending",
-      })
-      .select("*")
-      .single();
-    if (error) {
-      // Unique race — skip silently.
-      continue;
-    }
-    created.push(data as ScorecardRow);
+  const created: ScorecardRow[] = [];
+  for (const ivId of targetIds) {
+    const row = await insertScorecardIfMissing(matchId, roundIndex1Based, ivId);
+    if (row) created.push(row);
   }
   return created;
+}
+
+/** Pending scorecards for a round (e.g. to resend request email/Slack). */
+export async function listPendingScorecardsForRound(
+  matchId: string,
+  roundIndex1Based: number,
+): Promise<ScorecardRow[]> {
+  const sb = supabaseServer();
+  const { data, error } = await sb
+    .from("interviewer_scorecards")
+    .select("*")
+    .eq("match_id", matchId)
+    .eq("round_index", roundIndex1Based)
+    .eq("status", "pending");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ScorecardRow[];
 }
 
 export interface ScorecardContext {

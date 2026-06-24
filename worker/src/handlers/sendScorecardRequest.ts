@@ -4,7 +4,7 @@ import { resolveEmailSettings } from "@/lib/email-templates";
 import { log } from "@/lib/logger";
 import type { QueueJob } from "@/lib/queue";
 import { listInterviewers } from "@/lib/interviewers";
-import { createScorecardsForRound, buildScorecardUrl } from "@/lib/scorecard";
+import { createScorecardsForRound, buildScorecardUrl, listPendingScorecardsForRound } from "@/lib/scorecard";
 import {
   buildScorecardRequestBlocks,
   lookupSlackUserByEmail,
@@ -13,9 +13,9 @@ import {
 
 export async function handleSendScorecardRequest(job: QueueJob): Promise<void> {
   const sb = supabaseServer();
-  const payload = job.payload as { round_index?: number; origin?: string };
-  const roundIndex = payload.round_index;
-  if (!roundIndex || roundIndex < 1) throw new Error("round_index required");
+  const payload = job.payload as { round_index?: number | string; origin?: string };
+  const roundIndex = Number(payload.round_index);
+  if (!Number.isFinite(roundIndex) || roundIndex < 1) throw new Error("round_index required");
 
   const { data: match } = await sb
     .from("matches")
@@ -39,9 +39,17 @@ export async function handleSendScorecardRequest(job: QueueJob): Promise<void> {
     jobRow.id as string,
     roundIndex,
   );
-  if (created.length === 0) {
-    log.info({ matchId: match.id, roundIndex }, "send_scorecard_request: no new scorecards");
-    return;
+  let cardsToNotify = created;
+  if (cardsToNotify.length === 0) {
+    cardsToNotify = await listPendingScorecardsForRound(match.id as string, roundIndex);
+    if (cardsToNotify.length === 0) {
+      log.info({ matchId: match.id, roundIndex }, "send_scorecard_request: no scorecards to notify");
+      return;
+    }
+    log.info(
+      { matchId: match.id, roundIndex, count: cardsToNotify.length },
+      "send_scorecard_request: notifying existing pending scorecards",
+    );
   }
 
   const interviewers = await listInterviewers(jobRow.id as string);
@@ -55,7 +63,7 @@ export async function handleSendScorecardRequest(job: QueueJob): Promise<void> {
   const origin = payload.origin ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const candidateName = (candidate?.name as string | null) ?? "the candidate";
 
-  for (const card of created) {
+  for (const card of cardsToNotify) {
     const iv = byId.get(card.interviewer_id);
     if (!iv?.email) continue;
 

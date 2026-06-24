@@ -266,7 +266,7 @@ export function InterviewProgress({
       onReschedule;
 
     return (
-      <div className="mt-1.5 pl-6 flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {scheduleInfo.starts_at && (
           <p className="text-[11px] text-cobalt-700 flex items-center gap-1">
             <Calendar className="h-3 w-3 shrink-0" />
@@ -292,7 +292,7 @@ export function InterviewProgress({
 
     if (canStart && roundIndex === 1) {
       return (
-        <div className="mt-2 flex flex-wrap gap-1.5 pl-6">
+        <div className="flex flex-wrap gap-1.5">
           <ActionBtn
             variant="primary"
             disabled={busy}
@@ -309,7 +309,7 @@ export function InterviewProgress({
 
     if (allRoundsComplete) {
       return (
-        <div className="mt-2 space-y-2 pl-6">
+        <div className="space-y-2">
           <p className="text-[11px] text-emerald-700">
             All rounds complete — mark as hired when ready.
           </p>
@@ -342,7 +342,7 @@ export function InterviewProgress({
     }
 
     return (
-      <div className="mt-2 space-y-2 pl-6">
+      <div className="space-y-2">
         {scheduleLocked && !scheduleInfo?.starts_at && (
           <p className="text-[11px] text-slate-500">Scheduling in progress…</p>
         )}
@@ -451,7 +451,7 @@ export function InterviewProgress({
       {rounds.length === 0 ? (
         <p className="text-xs text-slate-500">No interview rounds configured for this job.</p>
       ) : (
-        <ol className="space-y-1">
+        <ol className="space-y-2">
           {rounds.map((round, i) => {
             const idx = i + 1;
             const passed = roundWasPassed(events, idx);
@@ -469,7 +469,7 @@ export function InterviewProgress({
             return (
               <li key={round.order}>
                 <div
-                  className={`flex items-start gap-2 rounded-lg px-2 py-2 text-xs transition-colors ${
+                  className={`flex items-start gap-2.5 rounded-lg px-2.5 py-2.5 text-xs transition-colors ${
                     isActive ? "bg-cobalt-50/80 ring-1 ring-cobalt-100" : ""
                   }`}
                 >
@@ -484,24 +484,30 @@ export function InterviewProgress({
                   ) : (
                     <Circle className="w-4 h-4 text-slate-300 shrink-0 mt-0.5" />
                   )}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-slate-900">{round.name}</span>
-                      {skipped && (
-                        <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wide">
-                          Skipped
-                        </span>
-                      )}
-                      {isActive && !done && (
-                        <span className="text-[10px] font-semibold text-cobalt-600 uppercase tracking-wide">
-                          Current
-                        </span>
-                      )}
+                  <div className="min-w-0 flex-1 flex flex-col gap-2.5">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-900">{round.name}</span>
+                        {skipped && (
+                          <span className="text-[10px] font-medium text-slate-400 uppercase tracking-wide">
+                            Skipped
+                          </span>
+                        )}
+                        {isActive && !done && (
+                          <span className="text-[10px] font-semibold text-cobalt-600 uppercase tracking-wide">
+                            Current
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-slate-500">{roundSubtitle(round)}</div>
                     </div>
-                    <div className="text-slate-500">{roundSubtitle(round)}</div>
+
+                    {renderRoundSchedule(idx)}
+
+                    {renderRoundActions(idx)}
 
                     {roundScorecards.length > 0 && (
-                      <div className="mt-2 space-y-1">
+                      <div className="space-y-1.5">
                         {roundScorecards.map((sc) => {
                           const rec = sc.recommendation
                             ? RECOMMENDATION_DISPLAY[sc.recommendation]
@@ -527,9 +533,6 @@ export function InterviewProgress({
                     )}
                   </div>
                 </div>
-
-                {renderRoundSchedule(idx)}
-                {renderRoundActions(idx)}
               </li>
             );
           })}

@@ -68,7 +68,7 @@ export function ScheduleInterviewModal({
       const list = (json.interviewers ?? []) as Interviewer[];
       setInterviewers(list);
       const defaults = list.filter(
-        (iv) => iv.round_index == null || iv.round_index === roundIndex,
+        (iv) => iv.round_index == null || iv.round_index === roundIndex - 1,
       );
       setSelectedIds(new Set((defaults.length ? defaults : list).map((iv) => iv.id)));
     } finally {

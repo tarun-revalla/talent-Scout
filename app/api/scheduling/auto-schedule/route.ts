@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
     if (interviewerIds.length === 0) {
       const allInterviewers = await listInterviewers(match.job_id as string);
       const roundInterviewers = allInterviewers.filter(
-        (iv) => iv.round_index === body.roundIndex || iv.round_index === null,
+        (iv) => iv.round_index === body.roundIndex! - 1 || iv.round_index === null,
       );
       interviewerIds = roundInterviewers.map((iv) => iv.id);
     }
