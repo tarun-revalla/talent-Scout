@@ -27,22 +27,27 @@ export function ScheduleInterviewModal({
   jobId,
   matchId,
   candidateName,
-  currentRoundIndex,
+  roundIndex,
   jobRounds,
+  rescheduleSessionId,
   onClose,
   onScheduled,
 }: {
   jobId: string;
   matchId: string;
   candidateName: string | null;
-  currentRoundIndex: number;
+  /** 1-based round index (matches match.current_round_index). */
+  roundIndex: number;
   jobRounds: InterviewRound[];
+  /** When set, releases this session before creating a new proposal. */
+  rescheduleSessionId?: string;
   onClose: () => void;
   onScheduled?: () => void;
 }) {
   const toast = useToast();
   const sortedRounds = [...jobRounds].sort((a, b) => a.order - b.order);
-  const currentRound = sortedRounds[currentRoundIndex];
+  const currentRound = sortedRounds[Math.max(0, roundIndex - 1)];
+  const isReschedule = Boolean(rescheduleSessionId);
 
   const [interviewers, setInterviewers] = useState<Interviewer[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -63,13 +68,36 @@ export function ScheduleInterviewModal({
       const list = (json.interviewers ?? []) as Interviewer[];
       setInterviewers(list);
       const defaults = list.filter(
-        (iv) => iv.round_index == null || iv.round_index === currentRoundIndex,
+        (iv) => iv.round_index == null || iv.round_index === roundIndex,
       );
       setSelectedIds(new Set((defaults.length ? defaults : list).map((iv) => iv.id)));
     } finally {
       setLoadingIv(false);
     }
-  }, [jobId, currentRoundIndex]);
+  }, [jobId, roundIndex]);
+
+  const loadExistingSession = useCallback(async () => {
+    if (!rescheduleSessionId) return;
+    try {
+      const res = await fetch(`/api/scheduling/sessions/${rescheduleSessionId}`, {
+        cache: "no-store",
+      });
+      const json = await res.json();
+      if (!res.ok) return;
+      const session = json.session as {
+        interviewer_ids?: string[];
+        duration_minutes?: number;
+      } | null;
+      if (session?.interviewer_ids?.length) {
+        setSelectedIds(new Set(session.interviewer_ids));
+      }
+      if (session?.duration_minutes) {
+        setDuration(session.duration_minutes);
+      }
+    } catch {
+      // Pre-fill is best-effort; recruiter can still pick interviewers manually.
+    }
+  }, [rescheduleSessionId]);
 
   const loadSlots = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -105,6 +133,10 @@ export function ScheduleInterviewModal({
   }, [loadInterviewers]);
 
   useEffect(() => {
+    void loadExistingSession();
+  }, [loadExistingSession]);
+
+  useEffect(() => {
     if (!loadingIv && selectedIds.size > 0) void loadSlots();
   }, [loadingIv, selectedIds, duration, loadSlots]);
 
@@ -135,19 +167,24 @@ export function ScheduleInterviewModal({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           matchId,
-          roundIndex: currentRoundIndex,
+          roundIndex,
           durationMinutes: duration,
           interviewerIds: [...selectedIds],
           slotStarts: selectedSlots,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          rescheduleSessionId,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Failed to schedule");
       toast(
-        selectedSlots.length > 1
-          ? `${selectedSlots.length} times proposed — awaiting interviewer pick`
-          : "Interview proposed — awaiting interviewer approval",
+        isReschedule
+          ? selectedSlots.length > 1
+            ? "Rescheduled — new times sent to the panel"
+            : "Rescheduled — new time sent to the panel"
+          : selectedSlots.length > 1
+            ? `${selectedSlots.length} times proposed — awaiting interviewer pick`
+            : "Interview proposed — awaiting interviewer approval",
         "success",
       );
       onScheduled?.();
@@ -180,10 +217,11 @@ export function ScheduleInterviewModal({
           <div>
             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Calendar className="h-5 w-5 text-cobalt-600" />
-              Schedule interview
+              {isReschedule ? "Reschedule interview" : "Schedule interview"}
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              {candidateName ?? "Candidate"} · {currentRound?.name ?? `Round ${currentRoundIndex + 1}`}
+              {candidateName ?? "Candidate"} · {currentRound?.name ?? `Round ${roundIndex}`}
+              {isReschedule ? " · pick new times and interviewers" : ""}
             </p>
           </div>
           <button
@@ -344,7 +382,7 @@ export function ScheduleInterviewModal({
                 ) : (
                   <Check className="h-4 w-4" />
                 )}
-                {selectedSlots.length > 1 ? "Propose times" : "Propose time"}
+                {isReschedule ? "Propose new times" : selectedSlots.length > 1 ? "Propose times" : "Propose time"}
               </button>
             </div>
           </div>

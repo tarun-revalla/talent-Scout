@@ -91,6 +91,22 @@ export interface ScorecardContext {
   roundName: string;
 }
 
+const QUICK_SLACK_NOTE = "Submitted from Slack quick action.";
+
+export function isQuickSlackScorecard(scorecard: ScorecardRow): boolean {
+  return (
+    scorecard.status === "submitted" &&
+    scorecard.overall_rating == null &&
+    scorecard.technical_rating == null &&
+    scorecard.communication_rating == null &&
+    scorecard.notes === QUICK_SLACK_NOTE
+  );
+}
+
+export function effectiveScorecardStatus(scorecard: ScorecardRow): string {
+  return isQuickSlackScorecard(scorecard) ? "pending" : scorecard.status;
+}
+
 export async function getScorecardByToken(token: string): Promise<ScorecardContext | null> {
   const sb = supabaseServer();
   const { data: scorecard } = await sb
@@ -136,6 +152,7 @@ export interface ScorecardSubmission {
 export async function submitScorecard(
   token: string,
   input: ScorecardSubmission,
+  opts?: { partial?: boolean },
 ): Promise<ScorecardRow> {
   const sb = supabaseServer();
   const { data: scorecard } = await sb
@@ -144,7 +161,11 @@ export async function submitScorecard(
     .eq("response_token", token)
     .maybeSingle();
   if (!scorecard) throw new Error("Invalid or expired scorecard link");
-  if (scorecard.status === "submitted") {
+  const quickOnly = isQuickSlackScorecard(scorecard as ScorecardRow);
+  if (scorecard.status === "submitted" && !opts?.partial && !quickOnly) {
+    throw new Error("This scorecard was already submitted");
+  }
+  if (scorecard.status === "submitted" && opts?.partial) {
     throw new Error("This scorecard was already submitted");
   }
 
@@ -154,16 +175,21 @@ export async function submitScorecard(
   };
 
   const now = new Date().toISOString();
+  const partial = opts?.partial === true;
   const { data, error } = await sb
     .from("interviewer_scorecards")
     .update({
-      status: "submitted",
+      status: partial ? "pending" : "submitted",
       recommendation: input.recommendation,
-      overall_rating: clamp(input.overall_rating),
-      technical_rating: clamp(input.technical_rating),
-      communication_rating: clamp(input.communication_rating),
-      notes: input.notes?.slice(0, 4000) ?? null,
-      submitted_at: now,
+      overall_rating: partial ? scorecard.overall_rating : clamp(input.overall_rating),
+      technical_rating: partial ? scorecard.technical_rating : clamp(input.technical_rating),
+      communication_rating: partial
+        ? scorecard.communication_rating
+        : clamp(input.communication_rating),
+      notes: partial
+        ? scorecard.notes
+        : input.notes?.slice(0, 4000) ?? scorecard.notes,
+      submitted_at: partial ? scorecard.submitted_at : now,
       updated_at: now,
     })
     .eq("id", scorecard.id)
@@ -171,13 +197,14 @@ export async function submitScorecard(
     .single();
   if (error) throw new Error(error.message);
 
-  // Audit trail in the round timeline (uses the generic 'note' event type).
-  await sb.from("match_round_events").insert({
-    match_id: scorecard.match_id,
-    round_index: scorecard.round_index,
-    event_type: "note",
-    note: `Scorecard submitted: ${RECOMMENDATION_LABEL[input.recommendation]}`,
-  });
+  if (!partial) {
+    await sb.from("match_round_events").insert({
+      match_id: scorecard.match_id,
+      round_index: scorecard.round_index,
+      event_type: "note",
+      note: `Scorecard submitted: ${RECOMMENDATION_LABEL[input.recommendation]}`,
+    });
+  }
 
   return data as ScorecardRow;
 }

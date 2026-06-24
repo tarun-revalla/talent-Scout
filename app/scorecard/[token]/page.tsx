@@ -22,6 +22,11 @@ interface ScorecardData {
   candidateName: string | null;
   jobTitle: string;
   roundName: string;
+  recommendation?: Recommendation | null;
+  overallRating?: number | null;
+  technicalRating?: number | null;
+  communicationRating?: number | null;
+  notes?: string | null;
 }
 
 function StarRating({
@@ -78,7 +83,15 @@ export default function ScorecardPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Link not found");
       setData(json as ScorecardData);
-      if (json.status === "submitted") setDone(true);
+      if (json.status === "submitted") {
+        setDone(true);
+      } else {
+        if (json.recommendation) setRecommendation(json.recommendation as Recommendation);
+        if (json.overallRating) setOverall(json.overallRating);
+        if (json.technicalRating) setTechnical(json.technicalRating);
+        if (json.communicationRating) setCommunication(json.communicationRating);
+        if (json.notes) setNotes(json.notes);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load");
     } finally {
@@ -164,6 +177,11 @@ export default function ScorecardPage() {
 
             {data && !done && !loading && (
               <>
+                {data.recommendation && (
+                  <p className="text-xs text-cobalt-700 bg-cobalt-50 border border-cobalt-100 rounded-lg px-3 py-2">
+                    Quick recommendation saved — add ratings and notes below, then submit.
+                  </p>
+                )}
                 <div>
                   <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
                     Candidate

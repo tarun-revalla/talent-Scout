@@ -127,14 +127,68 @@ export function buildApprovalBlocks(args: {
   candidateName: string;
   jobTitle: string;
   roundName: string;
-  slotLocal: string;
+  slots: { start: string; label: string }[];
   durationMinutes: number;
   respondUrl: string;
   responseToken: string;
   origin: string;
 }): SlackBlock[] {
-  const approveUrl = `${args.origin}/api/slack/actions?token=${args.responseToken}&action=accept`;
-  const rejectUrl = `${args.origin}/api/slack/actions?token=${args.responseToken}&action=reject`;
+  const slotList =
+    args.slots.length > 0
+      ? args.slots
+      : [{ start: "", label: "See scheduling link" }];
+  const multi = slotList.length > 1;
+
+  const timesText = multi
+    ? `*Proposed times — pick one:*\n${slotList.map((s) => `• ${s.label}`).join("\n")}`
+    : `*Proposed time:* ${slotList[0]!.label}`;
+
+  const actionButtons: Record<string, unknown>[] = [];
+  if (!multi) {
+    const slot = slotList[0]!;
+    actionButtons.push(
+      {
+        type: "button",
+        text: { type: "plain_text", text: "✅ Yes" },
+        style: "primary",
+        value: slot.start
+          ? `${args.responseToken}|${slot.start}`
+          : args.responseToken,
+        action_id: "approve_interview",
+      },
+      {
+        type: "button",
+        text: { type: "plain_text", text: "❌ No" },
+        style: "danger",
+        value: args.responseToken,
+        action_id: "reject_interview",
+      },
+    );
+  } else {
+    for (const slot of slotList) {
+      actionButtons.push({
+        type: "button",
+        text: { type: "plain_text", text: slot.label },
+        value: `${args.responseToken}|${slot.start}`,
+        action_id: "approve_interview_slot",
+      });
+    }
+    actionButtons.push({
+      type: "button",
+      text: { type: "plain_text", text: "None work" },
+      style: "danger",
+      value: args.responseToken,
+      action_id: "reject_interview",
+    });
+  }
+
+  const actionBlocks: SlackBlock[] = [];
+  for (let i = 0; i < actionButtons.length; i += 5) {
+    actionBlocks.push({
+      type: "actions",
+      elements: actionButtons.slice(i, i + 5),
+    });
+  }
 
   return [
     {
@@ -144,37 +198,17 @@ export function buildApprovalBlocks(args: {
         text:
           `*Interview request:* ${args.candidateName} · ${args.jobTitle}\n` +
           `*Round:* ${args.roundName}\n` +
-          `*Proposed time:* ${args.slotLocal}\n` +
+          `${timesText}\n` +
           `*Duration:* ${args.durationMinutes} minutes`,
       },
     },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: "✅ Approve" },
-          style: "primary",
-          url: approveUrl,
-          value: args.responseToken,
-          action_id: "approve_interview",
-        },
-        {
-          type: "button",
-          text: { type: "plain_text", text: "❌ Reject" },
-          style: "danger",
-          url: rejectUrl,
-          value: args.responseToken,
-          action_id: "reject_interview",
-        },
-      ],
-    },
+    ...actionBlocks,
     {
       type: "context",
       elements: [
         {
           type: "mrkdwn",
-          text: `<${args.respondUrl}|View in browser> if buttons don't work`,
+          text: `Tap a button above, or <${args.respondUrl}|open the full picker in your browser>.`,
         },
       ],
     },
@@ -187,12 +221,18 @@ export function buildResolvedBlocks(args: {
   jobTitle: string;
   roundName: string;
   slotLocal: string;
-  action: "accepted" | "rejected";
+  action: "accepted" | "rejected" | "cancelled";
   responseToken?: string;
   origin?: string;
 }): SlackBlock[] {
-  const emoji = args.action === "accepted" ? "✅" : "❌";
-  const label = args.action === "accepted" ? "Approved" : "Rejected";
+  const emoji =
+    args.action === "accepted" ? "✅" : args.action === "cancelled" ? "🔄" : "❌";
+  const label =
+    args.action === "accepted"
+      ? "Approved"
+      : args.action === "cancelled"
+        ? "Reschedule requested"
+        : "Rejected";
   const blocks: SlackBlock[] = [
     {
       type: "section",
@@ -211,18 +251,16 @@ export function buildResolvedBlocks(args: {
       elements: [
         {
           type: "button",
-          text: { type: "plain_text", text: "Cancel interview" },
-          style: "danger",
-          url: `${args.origin}/api/slack/actions?token=${args.responseToken}&action=cancel`,
+          text: { type: "plain_text", text: "Reschedule" },
           value: args.responseToken,
-          action_id: "cancel_interview",
+          action_id: "reschedule_interview",
           confirm: {
-            title: { type: "plain_text", text: "Cancel interview?" },
+            title: { type: "plain_text", text: "Reschedule interview?" },
             text: {
               type: "mrkdwn",
-              text: "This releases the reserved time and asks the system to propose another slot.",
+              text: "This releases the reserved time and proposes new slots for the panel.",
             },
-            confirm: { type: "plain_text", text: "Cancel interview" },
+            confirm: { type: "plain_text", text: "Reschedule" },
             deny: { type: "plain_text", text: "Keep it" },
           },
         },
@@ -285,7 +323,7 @@ export function buildScorecardRequestBlocks(args: {
       elements: [
         {
           type: "mrkdwn",
-          text: "Quick recommendations submit immediately. Use the full scorecard when the decision needs more context.",
+          text: "Quick recommendations save your hire decision. Open the full scorecard to add ratings and notes before final submit.",
         },
       ],
     },

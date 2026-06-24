@@ -62,3 +62,29 @@ export function buildIcsEvent(args: IcsEventArgs): string {
     "END:VCALENDAR",
   ].join("\r\n");
 }
+
+/** Build a CANCEL VEVENT so calendar clients remove a prior invite. */
+export function buildIcsCancelEvent(args: IcsEventArgs): string {
+  const now = DateTime.utc().toFormat("yyyyMMdd'T'HHmmss'Z'");
+  const dtStart = formatIcsDate(args.start);
+  const dtEnd = formatIcsDate(args.end);
+
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Talent Scout//Interview Scheduler//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:CANCEL",
+    "BEGIN:VEVENT",
+    `UID:${args.uid}`,
+    `DTSTAMP:${now}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${escapeIcs(args.summary)}`,
+    `ORGANIZER;CN=${escapeIcs(args.organizerName)}:mailto:${args.organizerEmail}`,
+    "STATUS:CANCELLED",
+    "SEQUENCE:1",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+}

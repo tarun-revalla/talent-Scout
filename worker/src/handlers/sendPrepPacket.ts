@@ -5,7 +5,7 @@ import { log } from "@/lib/logger";
 import type { QueueJob } from "@/lib/queue";
 import { getSession, getLatestProposal } from "@/lib/scheduling";
 import { listInterviewers } from "@/lib/interviewers";
-import { formatSlotLocal } from "@/lib/scheduling-email";
+import { formatSlotLocal, buildCandidateRescheduleUrl } from "@/lib/scheduling-email";
 
 export async function handleSendPrepPacket(job: QueueJob): Promise<void> {
   const sb = supabaseServer();
@@ -73,6 +73,11 @@ export async function handleSendPrepPacket(job: QueueJob): Promise<void> {
   const emailSettings = resolveEmailSettings(jobRow.email_settings);
   const when = formatSlotLocal(proposal.slot_start, session.timezone);
   const firstName = (candidate.name as string | null)?.split(" ")[0] ?? "there";
+  const origin = process.env.NEXT_PUBLIC_APP_URL ?? undefined;
+  const candidateRescheduleToken = proposal.candidate_reschedule_token as string | null;
+  const candidateRescheduleUrl = candidateRescheduleToken
+    ? buildCandidateRescheduleUrl(candidateRescheduleToken, origin)
+    : undefined;
 
   const parsedJd = jobRow.parsed_jd as Record<string, unknown> | null;
   const skills = (parsedJd?.skills_required as string[] | null)?.join(", ") ?? "";
@@ -116,8 +121,11 @@ export async function handleSendPrepPacket(job: QueueJob): Promise<void> {
     `━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `• Be ready to join 5 minutes early\n` +
     `• Have questions prepared for your interviewers\n` +
-    `• Review the job description beforehand\n\n` +
-    `Good luck — we're rooting for you!\n\n` +
+    `• Review the job description beforehand\n` +
+    (candidateRescheduleUrl
+      ? `\nNeed to reschedule? Use this link (valid up to 24h before the interview):\n${candidateRescheduleUrl}\n`
+      : "") +
+    `\nGood luck — we're rooting for you!\n\n` +
     `${emailSettings.recruiter_name}`;
 
   const sent = await sendEmail({

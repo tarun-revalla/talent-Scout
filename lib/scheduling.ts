@@ -42,11 +42,42 @@ export interface SchedulingProposal {
   response_token: string;
   responded_at: string | null;
   proposal_index: number;
+  candidate_reschedule_token?: string | null;
 }
 
 function slotsOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
   return new Date(aStart).getTime() < new Date(bEnd).getTime() &&
     new Date(bStart).getTime() < new Date(aEnd).getTime();
+}
+
+function slotStartMs(iso: string): number {
+  return new Date(iso).getTime();
+}
+
+/** Match a user-selected slot start to an available overlap slot (ISO strings may differ). */
+function findMatchingSlot(requestedStart: string, slots: FreeSlot[]): FreeSlot | undefined {
+  const requestedMs = slotStartMs(requestedStart);
+  return slots.find((s) => slotStartMs(s.start) === requestedMs);
+}
+
+/** Normalize proposed_slots from DB (jsonb array, legacy rows, or string). */
+export function getProposalSlotOptions(proposal: SchedulingProposal): ProposedSlot[] {
+  let raw: unknown = proposal.proposed_slots;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = [];
+    }
+  }
+  const slots = Array.isArray(raw) ? (raw as ProposedSlot[]) : [];
+  if (slots.length > 0) {
+    return slots.filter((s) => s?.start && s?.end);
+  }
+  if (proposal.slot_start && proposal.slot_end) {
+    return [{ start: proposal.slot_start, end: proposal.slot_end }];
+  }
+  return [];
 }
 
 function rowToSession(r: Record<string, unknown>): SchedulingSession {
@@ -349,8 +380,11 @@ export async function createSchedulingSession(
     input.interviewerIds,
     input.durationMinutes,
   );
-  const available = new Set(slots.map((s) => s.start));
-  const validStarts = requestedStarts.filter((s) => available.has(s));
+  const validStarts: string[] = [];
+  for (const requested of requestedStarts) {
+    const match = findMatchingSlot(requested, slots);
+    if (match) validStarts.push(match.start);
+  }
   if (validStarts.length === 0) {
     throw new Error("Selected slot is no longer available — please pick another time");
   }
@@ -518,9 +552,10 @@ export async function respondToProposal(
   // Accept — resolve which slot was chosen (multi-slot picker) or default to slot_start.
   let chosenStart = ctx.proposal.slot_start;
   let chosenEnd = ctx.proposal.slot_end;
-  const options = ctx.proposal.proposed_slots ?? [];
+  const options = getProposalSlotOptions(ctx.proposal);
   if (selectedSlotStart && options.length > 0) {
-    const match = options.find((s) => s.start === selectedSlotStart);
+    const selectedMs = slotStartMs(selectedSlotStart);
+    const match = options.find((s) => slotStartMs(s.start) === selectedMs);
     if (!match) throw new Error("Selected time is not one of the proposed options");
     chosenStart = match.start;
     chosenEnd = match.end;
@@ -677,6 +712,142 @@ export async function getConfirmedInterview(sessionId: string): Promise<{
     .eq("session_id", sessionId)
     .maybeSingle();
   return data as typeof data & { prep_packet_sent_at: string | null } | null;
+}
+
+export async function getRescheduleContext(
+  sessionId: string,
+  matchId: string,
+  roundIndex: number,
+  newSlotStart: string,
+): Promise<{
+  previousSlotStart: string;
+  previousSlotEnd?: string;
+  previousSessionId?: string;
+} | null> {
+  const sb = supabaseServer();
+
+  const { data: sameSession } = await sb
+    .from("scheduled_interviews")
+    .select("starts_at, ends_at")
+    .eq("session_id", sessionId)
+    .maybeSingle();
+  if (sameSession?.starts_at && sameSession.starts_at !== newSlotStart) {
+    return {
+      previousSlotStart: sameSession.starts_at as string,
+      previousSlotEnd: (sameSession.ends_at as string | null) ?? undefined,
+      previousSessionId: sessionId,
+    };
+  }
+
+  const { data: otherSession } = await sb
+    .from("scheduled_interviews")
+    .select("starts_at, ends_at, session_id")
+    .eq("match_id", matchId)
+    .eq("round_index", roundIndex)
+    .neq("session_id", sessionId)
+    .not("starts_at", "is", null)
+    .order("starts_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (otherSession?.starts_at) {
+    return {
+      previousSlotStart: otherSession.starts_at as string,
+      previousSlotEnd: (otherSession.ends_at as string | null) ?? undefined,
+      previousSessionId: otherSession.session_id as string,
+    };
+  }
+
+  return null;
+}
+
+export async function releaseSchedulingSession(sessionId: string): Promise<{
+  previousSlotStart?: string;
+  previousSlotEnd?: string;
+  previousSessionId?: string;
+}> {
+  const session = await getSession(sessionId);
+  if (!session) throw new Error("Session not found");
+
+  const proposal = await getLatestProposal(sessionId);
+  const sb = supabaseServer();
+  const now = new Date().toISOString();
+
+  const { data: priorInterview } = await sb
+    .from("scheduled_interviews")
+    .select("starts_at, ends_at")
+    .eq("session_id", sessionId)
+    .maybeSingle();
+
+  const previousSlotStart =
+    (priorInterview?.starts_at as string | undefined) ?? proposal?.slot_start;
+  const previousSlotEnd =
+    (priorInterview?.ends_at as string | undefined) ?? proposal?.slot_end;
+
+  if (proposal?.status === "accepted" && ["approved", "confirmed"].includes(session.status)) {
+    await sb
+      .from("scheduling_slot_reservations")
+      .update({ status: "released", released_at: now })
+      .eq("session_id", sessionId)
+      .in("status", ["active", "confirmed"]);
+
+    await sb
+      .from("scheduled_interviews")
+      .update({ confirmed_at: null })
+      .eq("session_id", sessionId);
+
+    await sb
+      .from("scheduling_proposals")
+      .update({ status: "rejected", responded_at: now })
+      .eq("id", proposal.id);
+  } else if (proposal?.status === "pending" && session.status === "pending_approval") {
+    await sb
+      .from("scheduling_proposals")
+      .update({ status: "rejected", responded_at: now })
+      .eq("id", proposal.id);
+  }
+
+  await sb
+    .from("scheduling_sessions")
+    .update({ status: "cancelled", updated_at: now })
+    .eq("id", sessionId);
+
+  if (!previousSlotStart) return {};
+  return {
+    previousSlotStart,
+    previousSlotEnd: previousSlotEnd ?? undefined,
+    previousSessionId: sessionId,
+  };
+}
+
+export async function rescheduleInterviewSession(sessionId: string): Promise<{ sessionId: string }> {
+  const session = await getSession(sessionId);
+  if (!session) throw new Error("Session not found");
+
+  const proposal = await getLatestProposal(sessionId);
+  if (!proposal) throw new Error("No scheduling proposal found");
+
+  if (
+    proposal.status === "accepted" &&
+    ["approved", "confirmed"].includes(session.status)
+  ) {
+    const { session: updated } = await cancelAcceptedInterview(proposal.response_token);
+    if (updated.status === "pending_approval") {
+      await enqueue(updated.match_id, "send_slack_approval", { sessionId: updated.id });
+      await enqueue(updated.match_id, "send_scheduling_proposal", { sessionId: updated.id });
+    }
+    return { sessionId: updated.id };
+  }
+
+  if (proposal.status === "pending" && session.status === "pending_approval") {
+    const { session: updated } = await respondToProposal(proposal.response_token, "reject");
+    if (updated.status === "pending_approval") {
+      await enqueue(updated.match_id, "send_slack_approval", { sessionId: updated.id });
+      await enqueue(updated.match_id, "send_scheduling_proposal", { sessionId: updated.id });
+    }
+    return { sessionId: updated.id };
+  }
+
+  throw new Error("This interview cannot be rescheduled in its current state");
 }
 
 /** Cancel a confirmed interview (used by candidate rescheduling). */

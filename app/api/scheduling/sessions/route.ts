@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { findOverlapSlots, createSchedulingSession, listSessionsForMatch } from "@/lib/scheduling";
+import { findOverlapSlots, createSchedulingSession, listSessionsForMatch, releaseSchedulingSession } from "@/lib/scheduling";
 import { enqueueIfAbsent } from "@/lib/queue";
 import { refineSlotsWithAi } from "@/lib/scheduling-ai";
 import { supabaseServer } from "@/lib/db";
@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
       slotStarts?: string[];
       timezone?: string;
       notes?: string;
+      rescheduleSessionId?: string;
     };
 
     if (body.action === "slots") {
@@ -114,6 +115,47 @@ export async function POST(req: NextRequest) {
     }
     if (!body.interviewerIds?.length) {
       return NextResponse.json({ error: "interviewerIds required" }, { status: 400 });
+    }
+
+    if (body.rescheduleSessionId) {
+      const released = await releaseSchedulingSession(body.rescheduleSessionId);
+      const sb = supabaseServer();
+      await sb.from("match_round_events").insert({
+        match_id: body.matchId,
+        round_index: body.roundIndex,
+        event_type: "note",
+        note: "Interview rescheduled — new times proposed to the panel.",
+      });
+
+      const result = await createSchedulingSession({
+        matchId: body.matchId,
+        roundIndex: body.roundIndex,
+        durationMinutes: body.durationMinutes,
+        interviewerIds: body.interviewerIds,
+        slotStart: body.slotStart,
+        slotStarts: body.slotStarts,
+        timezone: body.timezone,
+        notes: body.notes,
+      });
+
+      const origin = req.nextUrl.origin;
+      await enqueueIfAbsent(body.matchId, "send_slack_approval", {
+        sessionId: result.session.id,
+        origin,
+      });
+      await enqueueIfAbsent(body.matchId, "send_scheduling_proposal", {
+        responseToken: result.proposal.response_token,
+        origin,
+      });
+      await enqueueIfAbsent(body.matchId, "send_candidate_invite", {
+        sessionId: result.session.id,
+        pendingReschedule: true,
+        previousSlotStart: released.previousSlotStart,
+        previousSlotEnd: released.previousSlotEnd,
+        previousSessionId: released.previousSessionId,
+      });
+
+      return NextResponse.json(result, { status: 201 });
     }
 
     const result = await createSchedulingSession({

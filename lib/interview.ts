@@ -5,6 +5,7 @@ import {
 import { supabaseServer } from "./db";
 import { enqueue } from "./queue";
 import { log } from "./logger";
+import { rescheduleInterviewSession } from "./scheduling";
 import {
   InterviewRoundsSchema,
   type InterviewRound,
@@ -216,6 +217,7 @@ export async function advanceInterviewRound(
   interview_state: InterviewState;
   current_round_index: number;
   hired: boolean;
+  all_rounds_complete?: boolean;
   job_closed?: boolean;
 }> {
   const { match, jobStatus, rounds } = await loadMatchContext(matchId);
@@ -226,31 +228,30 @@ export async function advanceInterviewRound(
   const idx = Number(match.current_round_index ?? 0);
   if (idx < 1 || idx > rounds.length) throw new Error("Invalid current round");
 
-  await logRoundEvent(matchId, idx, "passed", note ?? rounds[idx - 1]!.name);
+  const sb = supabaseServer();
 
-  // Request scorecards from this round's interviewers (best-effort).
+  if (idx >= rounds.length) {
+    const { data: alreadyPassed } = await sb
+      .from("match_round_events")
+      .select("id")
+      .eq("match_id", matchId)
+      .eq("round_index", idx)
+      .eq("event_type", "passed")
+      .maybeSingle();
+    if (alreadyPassed) {
+      throw new Error("All rounds are complete. Mark the candidate as hired when you are ready.");
+    }
+  }
+
+  await logRoundEvent(matchId, idx, "passed", note ?? rounds[idx - 1]!.name);
   await enqueueScorecardRequest(matchId, idx);
 
-  const sb = supabaseServer();
   if (idx >= rounds.length) {
-    const { error } = await sb
-      .from("matches")
-      .update({
-        interview_state: "hired",
-        current_round_index: idx,
-        pipeline_stage: "archived",
-        last_action_at: new Date().toISOString(),
-      })
-      .eq("id", matchId);
-    if (error) throw new Error(error.message);
-    await logRoundEvent(matchId, idx, "hired", "Completed all interview rounds");
-    await archiveMatchesOnOtherJobs(match.candidate_id as string, match.job_id as string);
-    const jobClosed = await maybeAutoCloseJobIfHiresFilled(match.job_id as string);
     return {
-      interview_state: "hired",
+      interview_state: "in_progress",
       current_round_index: idx,
-      hired: true,
-      job_closed: jobClosed,
+      hired: false,
+      all_rounds_complete: true,
     };
   }
 
@@ -280,6 +281,68 @@ export async function advanceInterviewRound(
   }
 
   return { interview_state: "in_progress", current_round_index: next, hired: false };
+}
+
+/** Explicit human action — never called automatically by the system. */
+export async function markCandidateAsHired(
+  matchId: string,
+  note?: string,
+): Promise<{
+  interview_state: InterviewState;
+  current_round_index: number;
+  hired: boolean;
+  job_closed?: boolean;
+}> {
+  const { match, jobStatus, rounds } = await loadMatchContext(matchId);
+  if (jobStatus === "closed") throw new Error("Job is closed");
+  if (match.interview_state !== "in_progress") {
+    throw new Error("Only candidates in an active interview can be marked as hired");
+  }
+  if (rounds.length === 0) throw new Error("Job has no interview rounds configured");
+
+  const idx = Number(match.current_round_index ?? 0);
+  if (idx < rounds.length) {
+    throw new Error("Complete all interview rounds before marking as hired");
+  }
+
+  const sb = supabaseServer();
+  const { data: finalPassed } = await sb
+    .from("match_round_events")
+    .select("id")
+    .eq("match_id", matchId)
+    .eq("round_index", rounds.length)
+    .eq("event_type", "passed")
+    .maybeSingle();
+  if (!finalPassed) {
+    throw new Error("Pass the final interview round before marking as hired");
+  }
+
+  const { error } = await sb
+    .from("matches")
+    .update({
+      interview_state: "hired",
+      current_round_index: rounds.length,
+      pipeline_stage: "archived",
+      last_action_at: new Date().toISOString(),
+    })
+    .eq("id", matchId);
+  if (error) throw new Error(error.message);
+
+  await logRoundEvent(
+    matchId,
+    rounds.length,
+    "hired",
+    note ?? "Marked as hired by recruiter",
+  );
+  await archiveMatchesOnOtherJobs(match.candidate_id as string, match.job_id as string);
+  const jobClosed = await maybeAutoCloseJobIfHiresFilled(match.job_id as string);
+
+  return {
+    interview_state: "hired",
+    current_round_index: rounds.length,
+    hired: true,
+    job_closed: jobClosed,
+  };
 }
 
 export async function rejectInInterview(
@@ -391,6 +454,21 @@ export async function recordInterviewNoShow(
   }
 }
 
+export async function skipInterviewRound(
+  matchId: string,
+  note?: string,
+): Promise<{
+  interview_state: InterviewState;
+  current_round_index: number;
+  hired: boolean;
+  all_rounds_complete?: boolean;
+}> {
+  const { match, rounds } = await loadMatchContext(matchId);
+  const idx = Number(match.current_round_index ?? 0);
+  const roundName = rounds[idx - 1]?.name ?? `Round ${idx}`;
+  return advanceInterviewRound(matchId, note ?? `Skipped: ${roundName}`);
+}
+
 export async function clearExpiredRejection(matchId: string): Promise<boolean> {
   const sb = supabaseServer();
   const { data } = await sb
@@ -419,20 +497,127 @@ export async function clearExpiredRejection(matchId: string): Promise<boolean> {
 
 export async function getInterviewTimeline(matchId: string) {
   const sb = supabaseServer();
-  const [{ data: events }, ctx] = await Promise.all([
+  const [{ data: events }, { data: sessions }, { data: interviews }, ctx] = await Promise.all([
     sb
       .from("match_round_events")
       .select("id, round_index, event_type, note, created_at")
       .eq("match_id", matchId)
       .order("created_at", { ascending: true }),
+    sb
+      .from("scheduling_sessions")
+      .select("id, round_index, status, updated_at")
+      .eq("match_id", matchId)
+      .not("status", "in", '("cancelled","expired")')
+      .order("updated_at", { ascending: false }),
+    sb
+      .from("scheduled_interviews")
+      .select("round_index, starts_at, ends_at")
+      .eq("match_id", matchId)
+      .order("starts_at", { ascending: false }),
     loadMatchContext(matchId).catch(() => null),
   ]);
+
+  const sessionIds = (sessions ?? []).map((s) => s.id as string);
+  const proposalsBySession: Record<
+    string,
+    { response_token: string; status: string; candidate_reschedule_token: string | null }
+  > = {};
+  if (sessionIds.length > 0) {
+    const { data: proposals } = await sb
+      .from("scheduling_proposals")
+      .select("session_id, response_token, status, candidate_reschedule_token, created_at")
+      .in("session_id", sessionIds)
+      .order("created_at", { ascending: false });
+    for (const row of proposals ?? []) {
+      const sid = row.session_id as string;
+      if (!proposalsBySession[sid]) {
+        proposalsBySession[sid] = {
+          response_token: row.response_token as string,
+          status: row.status as string,
+          candidate_reschedule_token: row.candidate_reschedule_token as string | null,
+        };
+      }
+    }
+  }
+
+  const ACTIVE_SESSION = new Set([
+    "proposing",
+    "pending_approval",
+    "approved",
+    "confirmed",
+  ]);
+
+  const schedulingByRound: Record<
+    number,
+    {
+      session_id: string | null;
+      session_status: string | null;
+      starts_at: string | null;
+      ends_at: string | null;
+      schedule_locked: boolean;
+      can_reschedule: boolean;
+    }
+  > = {};
+
+  for (const row of sessions ?? []) {
+    const ri = Number(row.round_index);
+    if (schedulingByRound[ri]) continue;
+    const status = row.status as string;
+    const sessionId = row.id as string;
+    const proposal = proposalsBySession[sessionId];
+    const canReschedule =
+      (proposal?.status === "accepted" && ["approved", "confirmed"].includes(status)) ||
+      (proposal?.status === "pending" && status === "pending_approval");
+    schedulingByRound[ri] = {
+      session_id: sessionId,
+      session_status: status,
+      starts_at: null,
+      ends_at: null,
+      schedule_locked: ACTIVE_SESSION.has(status),
+      can_reschedule: canReschedule,
+    };
+  }
+
+  for (const row of interviews ?? []) {
+    const ri = Number(row.round_index);
+    const existing = schedulingByRound[ri];
+    schedulingByRound[ri] = {
+      session_id: existing?.session_id ?? null,
+      session_status: existing?.session_status ?? "confirmed",
+      starts_at: row.starts_at as string,
+      ends_at: row.ends_at as string,
+      schedule_locked: true,
+      can_reschedule: existing?.can_reschedule ?? false,
+    };
+  }
+
   return {
     events: events ?? [],
+    scheduling: schedulingByRound,
     rounds: ctx?.rounds ?? [],
     match: ctx?.match ?? null,
     coolingMonths: ctx?.coolingMonths ?? 6,
   };
+}
+
+export async function rescheduleInterviewRound(
+  matchId: string,
+  roundIndex: number,
+): Promise<{ sessionId: string }> {
+  const timeline = await getInterviewTimeline(matchId);
+  const info = timeline.scheduling[roundIndex];
+  if (!info?.session_id) {
+    throw new Error("No active scheduling session for this round");
+  }
+  const result = await rescheduleInterviewSession(info.session_id);
+  const sb = supabaseServer();
+  await sb.from("match_round_events").insert({
+    match_id: matchId,
+    round_index: roundIndex,
+    event_type: "note",
+    note: "Interview reschedule requested — proposing new times.",
+  });
+  return result;
 }
 
 export { defaultRoundsForLevel } from "./interview-defaults";

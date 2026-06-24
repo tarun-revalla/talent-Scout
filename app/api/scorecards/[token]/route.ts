@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  effectiveScorecardStatus,
   getScorecardByToken,
   submitScorecard,
   type ScorecardRecommendation,
@@ -20,7 +21,7 @@ export async function GET(
     return NextResponse.json({ error: "Invalid or expired scorecard link" }, { status: 404 });
   }
   return NextResponse.json({
-    status: ctx.scorecard.status,
+    status: effectiveScorecardStatus(ctx.scorecard),
     interviewerName: ctx.interviewerName,
     candidateName: ctx.candidateName,
     jobTitle: ctx.jobTitle,

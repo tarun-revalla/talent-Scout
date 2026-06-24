@@ -1,7 +1,7 @@
 import { supabaseServer } from "@/lib/db";
 import { log } from "@/lib/logger";
 import type { QueueJob } from "@/lib/queue";
-import { getSession, getLatestProposal } from "@/lib/scheduling";
+import { getSession, getLatestProposal, getProposalSlotOptions } from "@/lib/scheduling";
 import { listInterviewers } from "@/lib/interviewers";
 import {
   buildApprovalBlocks,
@@ -55,14 +55,28 @@ export async function handleSendSlackApproval(job: QueueJob): Promise<void> {
   const roundName = sorted[session.round_index]?.name ?? `Round ${session.round_index + 1}`;
 
   const origin = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const slotLocal = formatSlotLocal(proposal.slot_start, session.timezone);
   const respondUrl = buildScheduleRespondUrl(proposal.response_token, origin);
+
+  const slotOptions = getProposalSlotOptions(proposal);
+  const slots = slotOptions.map((s) => ({
+    start: s.start,
+    label: formatSlotLocal(s.start, session.timezone),
+  }));
+
+  if (slots.length === 0) {
+    log.warn({ sessionId, proposalId: proposal.id }, "send_slack_approval: no slots on proposal");
+  }
+
+  log.info(
+    { sessionId, proposalId: proposal.id, slotCount: slots.length },
+    "send_slack_approval: building blocks",
+  );
 
   const blocks = buildApprovalBlocks({
     candidateName: (candidate?.name as string | null) ?? "Candidate",
     jobTitle: jobRow.title as string,
     roundName,
-    slotLocal,
+    slots,
     durationMinutes: session.duration_minutes,
     respondUrl,
     responseToken: proposal.response_token,
@@ -70,7 +84,7 @@ export async function handleSendSlackApproval(job: QueueJob): Promise<void> {
   });
 
   const text =
-    `Interview approval needed: ${candidate?.name ?? "Candidate"} · ${jobRow.title as string} · ${slotLocal}`;
+    `Interview approval needed: ${candidate?.name ?? "Candidate"} · ${jobRow.title as string} · ${slots.length > 1 ? `${slots.length} times` : slots[0]!.label}`;
 
   const slackUsersNotified: string[] = [];
 

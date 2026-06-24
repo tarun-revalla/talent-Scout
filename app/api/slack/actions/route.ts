@@ -37,6 +37,7 @@ const SCORECARD_ACTIONS: Record<string, ScorecardRecommendation> = {
 async function processSlackAction(
   token: string,
   action: "accept" | "reject" | "cancel",
+  selectedSlotStart?: string,
 ): Promise<"approved" | "rejected" | "cancelled" | "expired" | "already"> {
   const ctx = await getProposalByToken(token);
   if (!ctx) return "expired";
@@ -46,7 +47,7 @@ async function processSlackAction(
   const { session, proposal } =
     action === "cancel"
       ? await cancelAcceptedInterview(token)
-      : await respondToProposal(token, action);
+      : await respondToProposal(token, action, { selectedSlotStart });
 
   // Reflect the resolved state back into the Slack message (best-effort).
   const sb = supabaseServer();
@@ -62,7 +63,12 @@ async function processSlackAction(
       jobTitle: ctx.job.title,
       roundName: `Round ${session.round_index + 1}`,
       slotLocal,
-      action: action === "accept" ? "accepted" : "rejected",
+      action:
+        action === "accept"
+          ? "accepted"
+          : action === "cancel"
+            ? "cancelled"
+            : "rejected",
       responseToken: action === "accept" ? proposal.response_token : undefined,
       origin: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
     });
@@ -117,6 +123,7 @@ async function processSlackAction(
 export async function GET(req: NextRequest) {
   const token = req.nextUrl.searchParams.get("token");
   const action = req.nextUrl.searchParams.get("action") as "accept" | "reject" | "cancel" | null;
+  const slot = req.nextUrl.searchParams.get("slot") ?? undefined;
 
   if (!token || !action || !["accept", "reject", "cancel"].includes(action)) {
     return new NextResponse("Invalid request", { status: 400 });
@@ -124,7 +131,7 @@ export async function GET(req: NextRequest) {
 
   const origin = req.nextUrl.origin;
   try {
-    const result = await processSlackAction(token, action);
+    const result = await processSlackAction(token, action, slot);
     if (result === "expired") {
       return NextResponse.redirect(`${origin}/schedule/respond/${token}?error=expired`);
     }
@@ -188,7 +195,9 @@ export async function POST(req: NextRequest) {
   }
 
   const clicked = payload.actions[0];
-  const token = clicked?.value ?? "";
+  let token = clicked?.value ?? "";
+  let selectedSlotStart: string | undefined;
+
   const scorecardRecommendation = clicked?.action_id
     ? SCORECARD_ACTIONS[clicked.action_id]
     : undefined;
@@ -197,7 +206,7 @@ export async function POST(req: NextRequest) {
       await submitScorecard(token, {
         recommendation: scorecardRecommendation,
         notes: "Submitted from Slack quick action.",
-      });
+      }, { partial: true });
       if (payload.response_url) {
         await fetch(payload.response_url, {
           method: "POST",
@@ -234,12 +243,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (clicked?.action_id === "approve_interview_slot" && token.includes("|")) {
+    const [proposalToken, slotStart] = token.split("|", 2);
+    token = proposalToken ?? "";
+    selectedSlotStart = slotStart;
+  } else if (clicked?.action_id === "approve_interview" && token.includes("|")) {
+    const [proposalToken, slotStart] = token.split("|", 2);
+    token = proposalToken ?? "";
+    selectedSlotStart = slotStart;
+  }
+
   const action: "accept" | "reject" | "cancel" | null =
-    clicked?.action_id === "approve_interview"
+    clicked?.action_id === "approve_interview" || clicked?.action_id === "approve_interview_slot"
       ? "accept"
       : clicked?.action_id === "reject_interview"
         ? "reject"
-        : clicked?.action_id === "cancel_interview"
+        : clicked?.action_id === "cancel_interview" || clicked?.action_id === "reschedule_interview"
           ? "cancel"
           : null;
 
@@ -249,7 +268,7 @@ export async function POST(req: NextRequest) {
 
   // Acknowledge immediately, then update the message via response_url.
   try {
-    const result = await processSlackAction(token, action);
+    const result = await processSlackAction(token, action, selectedSlotStart);
     if (payload.response_url) {
       const messages: Record<string, string> = {
         approved: "✅ Approved — the candidate is being invited to confirm the time.",

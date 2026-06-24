@@ -4,12 +4,19 @@ import { resolveEmailSettings } from "@/lib/email-templates";
 import { env } from "@/lib/env";
 import { log } from "@/lib/logger";
 import type { QueueJob } from "@/lib/queue";
-import { buildIcsEvent } from "@/lib/calendar/ics-generate";
-import { buildCandidateInviteEmail, buildCandidateRescheduleUrl } from "@/lib/scheduling-email";
+import { buildIcsCancelEvent, buildIcsEvent } from "@/lib/calendar/ics-generate";
+import {
+  buildCandidateInviteEmail,
+  buildCandidateReschedulePendingEmail,
+  buildCandidateRescheduledEmail,
+  buildCandidateRescheduleUrl,
+  buildInterviewerRescheduleUrl,
+} from "@/lib/scheduling-email";
 import {
   assertSlotReservedForSession,
   confirmScheduledInterview,
   getLatestProposal,
+  getRescheduleContext,
   getSession,
 } from "@/lib/scheduling";
 import { listInterviewers } from "@/lib/interviewers";
@@ -28,20 +35,35 @@ function uniqueEmails(emails: Array<string | null | undefined>): string[] {
 
 export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
   const sb = supabaseServer();
-  const payload = job.payload as { sessionId?: string };
+  const payload = job.payload as {
+    sessionId?: string;
+    pendingReschedule?: boolean;
+    previousSlotStart?: string;
+    previousSlotEnd?: string;
+    previousSessionId?: string;
+  };
   const sessionId = payload.sessionId;
   if (!sessionId) throw new Error("sessionId required");
 
   const session = await getSession(sessionId);
   if (!session) throw new Error("session not found");
-  if (session.status !== "approved") {
-    log.info({ sessionId }, "send_candidate_invite: skipping (not approved)");
-    return;
-  }
 
   const proposal = await getLatestProposal(sessionId);
-  if (!proposal || proposal.status !== "accepted") {
-    throw new Error("no accepted proposal");
+  if (!proposal) throw new Error("no proposal found");
+
+  if (payload.pendingReschedule) {
+    if (proposal.status !== "pending") {
+      log.info({ sessionId }, "send_candidate_invite: pending reschedule skipped (not pending)");
+      return;
+    }
+  } else {
+    if (session.status !== "approved") {
+      log.info({ sessionId }, "send_candidate_invite: skipping (not approved)");
+      return;
+    }
+    if (proposal.status !== "accepted") {
+      throw new Error("no accepted proposal");
+    }
   }
 
   const { data: match } = await sb
@@ -65,11 +87,13 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
     return;
   }
 
-  await assertSlotReservedForSession({
-    session,
-    proposal,
-    candidateId: (candidate.id as string | null) ?? null,
-  });
+  if (!payload.pendingReschedule) {
+    await assertSlotReservedForSession({
+      session,
+      proposal,
+      candidateId: (candidate.id as string | null) ?? null,
+    });
+  }
 
   const interviewers = await listInterviewers(jobRow.id as string);
   const panel = interviewers.filter((iv) => session.interviewer_ids.includes(iv.id));
@@ -80,9 +104,8 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
   const roundName = sorted[session.round_index]?.name ?? `Round ${session.round_index + 1}`;
 
   const emailSettings = resolveEmailSettings(jobRow.email_settings);
-  const icsUid = `talentscout-${sessionId}@talentscout`;
+  const origin = process.env.NEXT_PUBLIC_APP_URL ?? undefined;
 
-  // Fetch the candidate's reschedule token from the accepted proposal.
   const { data: proposalWithToken } = await sb
     .from("scheduling_proposals")
     .select("candidate_reschedule_token")
@@ -90,23 +113,99 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
     .maybeSingle();
 
   const candidateRescheduleToken = proposalWithToken?.candidate_reschedule_token as string | null;
-  const origin = process.env.NEXT_PUBLIC_APP_URL ?? undefined;
   const rescheduleUrl = candidateRescheduleToken
     ? buildCandidateRescheduleUrl(candidateRescheduleToken, origin)
     : undefined;
+  const interviewerRescheduleUrl = buildInterviewerRescheduleUrl(proposal.response_token, origin);
 
-  const { subject, body } = buildCandidateInviteEmail({
-    candidateName: candidate.name as string | null,
-    jobTitle: jobRow.title as string,
-    roundName,
-    slotStart: proposal.slot_start,
-    timezone: session.timezone,
-    durationMinutes: session.duration_minutes,
-    recruiterName: emailSettings.recruiter_name,
-    interviewerNames: panel.map((iv) => iv.name),
-    rescheduleUrl,
-  });
+  const proposedSlots =
+    proposal.proposed_slots && proposal.proposed_slots.length > 0
+      ? proposal.proposed_slots
+      : [{ start: proposal.slot_start, end: proposal.slot_end }];
 
+  if (payload.pendingReschedule) {
+    const { subject, body } = buildCandidateReschedulePendingEmail({
+      candidateName: candidate.name as string | null,
+      jobTitle: jobRow.title as string,
+      roundName,
+      timezone: session.timezone,
+      durationMinutes: session.duration_minutes,
+      recruiterName: emailSettings.recruiter_name,
+      interviewerNames: panel.map((iv) => iv.name),
+      previousSlotStart: payload.previousSlotStart,
+      proposedSlots,
+    });
+
+    const sent = await sendEmail({
+      to: candidate.email as string,
+      subject,
+      body,
+      htmlOptions: {
+        recruiterName: emailSettings.recruiter_name,
+        jobTitle: jobRow.title as string,
+      },
+    });
+
+    await sb.from("conversations").insert({
+      match_id: match.id,
+      direction: "out",
+      subject,
+      body,
+      message_id: sent.messageId,
+      sent_at: sent.acceptedAt,
+    });
+
+    log.info(
+      { matchId: match.id, sessionId, to: candidate.email },
+      "send_candidate_invite: sent pending reschedule notice",
+    );
+    return;
+  }
+
+  const rescheduleCtx =
+    payload.previousSlotStart
+      ? {
+          previousSlotStart: payload.previousSlotStart,
+          previousSlotEnd: payload.previousSlotEnd,
+          previousSessionId: payload.previousSessionId,
+        }
+      : await getRescheduleContext(
+          sessionId,
+          session.match_id,
+          session.round_index,
+          proposal.slot_start,
+        );
+
+  const isReschedule = Boolean(rescheduleCtx?.previousSlotStart);
+
+  const emailContent = isReschedule
+    ? buildCandidateRescheduledEmail({
+        candidateName: candidate.name as string | null,
+        jobTitle: jobRow.title as string,
+        roundName,
+        slotStart: proposal.slot_start,
+        previousSlotStart: rescheduleCtx!.previousSlotStart,
+        timezone: session.timezone,
+        durationMinutes: session.duration_minutes,
+        recruiterName: emailSettings.recruiter_name,
+        interviewerNames: panel.map((iv) => iv.name),
+        rescheduleUrl,
+        interviewerRescheduleUrl,
+      })
+    : buildCandidateInviteEmail({
+        candidateName: candidate.name as string | null,
+        jobTitle: jobRow.title as string,
+        roundName,
+        slotStart: proposal.slot_start,
+        timezone: session.timezone,
+        durationMinutes: session.duration_minutes,
+        recruiterName: emailSettings.recruiter_name,
+        interviewerNames: panel.map((iv) => iv.name),
+        rescheduleUrl,
+        interviewerRescheduleUrl,
+      });
+
+  const icsUid = `talentscout-${sessionId}@talentscout`;
   const ics = buildIcsEvent({
     uid: icsUid,
     start: proposal.slot_start,
@@ -126,6 +225,38 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
           : panel.find((iv) => iv.email.toLowerCase() === email)?.name,
       })),
   });
+
+  const attachments: Array<{
+    filename: string;
+    content: string;
+    contentType: string;
+  }> = [
+    {
+      filename: "interview.ics",
+      content: ics,
+      contentType: "text/calendar; method=REQUEST",
+    },
+  ];
+
+  if (isReschedule && rescheduleCtx?.previousSessionId && rescheduleCtx.previousSlotEnd) {
+    const cancelUid = `talentscout-${rescheduleCtx.previousSessionId}@talentscout`;
+    attachments.unshift({
+      filename: "cancel-interview.ics",
+      content: buildIcsCancelEvent({
+        uid: cancelUid,
+        start: rescheduleCtx.previousSlotStart,
+        end: rescheduleCtx.previousSlotEnd,
+        summary: `${jobRow.title} — ${roundName}`,
+        description: `Cancelled interview for ${jobRow.title}`,
+        organizerEmail: env.gmailUser(),
+        organizerName: emailSettings.recruiter_name,
+        attendeeEmail: candidate.email as string,
+        attendeeName: candidate.name as string | null,
+      }),
+      contentType: "text/calendar; method=CANCEL",
+    });
+  }
+
   const cc = uniqueEmails([env.gmailUser(), ...panel.map((iv) => iv.email)]).filter(
     (email) => email !== (candidate.email as string).toLowerCase(),
   );
@@ -133,19 +264,13 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
   const sent = await sendEmail({
     to: candidate.email as string,
     cc,
-    subject,
-    body,
+    subject: emailContent.subject,
+    body: emailContent.body,
     htmlOptions: {
       recruiterName: emailSettings.recruiter_name,
       jobTitle: jobRow.title as string,
     },
-    attachments: [
-      {
-        filename: "interview.ics",
-        content: ics,
-        contentType: "text/calendar; method=REQUEST",
-      },
-    ],
+    attachments,
   });
 
   await confirmScheduledInterview(sessionId);
@@ -153,8 +278,8 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
   await sb.from("conversations").insert({
     match_id: match.id,
     direction: "out",
-    subject,
-    body,
+    subject: emailContent.subject,
+    body: emailContent.body,
     message_id: sent.messageId,
     sent_at: sent.acceptedAt,
   });
@@ -168,7 +293,7 @@ export async function handleSendCandidateInvite(job: QueueJob): Promise<void> {
     .eq("id", match.id);
 
   log.info(
-    { matchId: match.id, sessionId, to: candidate.email },
+    { matchId: match.id, sessionId, to: candidate.email, isReschedule },
     "send_candidate_invite: sent with ICS",
   );
 }

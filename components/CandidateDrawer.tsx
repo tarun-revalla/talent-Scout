@@ -47,6 +47,11 @@ export function CandidateDrawer({
   const [stageBusy, setStageBusy] = useState(false);
   const [composing, setComposing] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  const [rescheduleCtx, setRescheduleCtx] = useState<{
+    roundIndex: number;
+    sessionId: string;
+  } | null>(null);
+  const [schedulingRefreshKey, setSchedulingRefreshKey] = useState(0);
   const [composeDraft, setComposeDraft] = useState<{
     subject: string;
     body: string;
@@ -309,8 +314,15 @@ export function CandidateDrawer({
                 rejectionReason={match.rejection_reason ?? null}
                 jobRounds={jobRounds}
                 pipelineStage={match.pipeline_stage ?? "new"}
+                schedulingRefreshKey={schedulingRefreshKey}
                 onChanged={onChanged}
-                onSchedule={() => setScheduling(true)}
+                onSchedule={() => {
+                  setRescheduleCtx(null);
+                  setScheduling(true);
+                }}
+                onReschedule={(roundIndex, sessionId) => {
+                  setRescheduleCtx({ roundIndex, sessionId });
+                }}
               />
             )}
 
@@ -424,16 +436,22 @@ export function CandidateDrawer({
       </div>
 
       <AnimatePresence>
-        {scheduling && jobRounds && (
+        {(scheduling || rescheduleCtx) && jobRounds && (
           <ScheduleInterviewModal
             jobId={jobId}
             matchId={match.id}
             candidateName={c.name}
-            currentRoundIndex={match.current_round_index ?? 0}
+            roundIndex={rescheduleCtx?.roundIndex ?? match.current_round_index ?? 1}
             jobRounds={jobRounds}
-            onClose={() => setScheduling(false)}
+            rescheduleSessionId={rescheduleCtx?.sessionId}
+            onClose={() => {
+              setScheduling(false);
+              setRescheduleCtx(null);
+            }}
             onScheduled={() => {
               setScheduling(false);
+              setRescheduleCtx(null);
+              setSchedulingRefreshKey((k) => k + 1);
               onChanged?.();
             }}
           />

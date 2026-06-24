@@ -50,10 +50,12 @@ export function buildSchedulingProposalEmail(args: ProposalEmailArgs): {
   const actionLine = multi
     ? `Open the link below to pick your preferred time:\n${respondUrl}\n\n` +
       `Pick a time — we'll invite the candidate and send calendar details.\n` +
-      `None work — we'll automatically propose new overlapping slots.`
+      `None work — we'll automatically propose new overlapping slots.\n\n` +
+      `If you use Slack, you can tap a time button directly in the approval message.`
     : `Please confirm this works with your calendar:\n${respondUrl}\n\n` +
-      `Accept — we'll invite the candidate and send calendar details.\n` +
-      `Decline — we'll automatically propose the next best overlapping slot.`;
+      `Yes — we'll invite the candidate and send calendar details.\n` +
+      `No — we'll automatically propose the next best overlapping slot.\n\n` +
+      `If you use Slack, tap Yes or No on the approval message.`;
 
   const body =
     `Hi ${args.interviewerName},\n\n` +
@@ -73,6 +75,8 @@ export interface ConfirmedEmailArgs {
   slotStart: string;
   timezone: string;
   interviewerNames: string[];
+  interviewerRescheduleUrl?: string;
+  candidateRescheduleUrl?: string;
 }
 
 export function buildSchedulingConfirmedEmail(args: ConfirmedEmailArgs): {
@@ -82,6 +86,16 @@ export function buildSchedulingConfirmedEmail(args: ConfirmedEmailArgs): {
   const when = formatSlotLocal(args.slotStart, args.timezone);
   const panel = args.interviewerNames.join(", ");
   const candidate = args.candidateName ?? "Candidate";
+  const rescheduleLines = [
+    args.interviewerRescheduleUrl
+      ? `Interviewers — need to reschedule? ${args.interviewerRescheduleUrl}`
+      : null,
+    args.candidateRescheduleUrl
+      ? `Candidate reschedule link: ${args.candidateRescheduleUrl}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return {
     subject: `Confirmed: ${candidate} interview · ${when}`,
@@ -90,8 +104,9 @@ export function buildSchedulingConfirmedEmail(args: ConfirmedEmailArgs): {
       `Candidate: ${candidate}\n` +
       `When: ${when} (${args.timezone})\n` +
       `Interviewers: ${panel}\n\n` +
-      `The candidate has been sent a calendar invite.\n\n` +
-      `${args.recruiterName}`,
+      `The candidate has been sent a calendar invite.\n` +
+      (rescheduleLines ? `\n${rescheduleLines}\n` : "\n") +
+      `\n${args.recruiterName}`,
   };
 }
 
@@ -105,6 +120,7 @@ export interface CandidateInviteEmailArgs {
   recruiterName: string;
   interviewerNames: string[];
   rescheduleUrl?: string;
+  interviewerRescheduleUrl?: string;
 }
 
 export function buildCandidateInviteEmail(args: CandidateInviteEmailArgs): {
@@ -118,6 +134,9 @@ export function buildCandidateInviteEmail(args: CandidateInviteEmailArgs): {
   const rescheduleNote = args.rescheduleUrl
     ? `\nNeed to reschedule? Use this link (valid up to 24h before the interview):\n${args.rescheduleUrl}\n`
     : "";
+  const panelRescheduleNote = args.interviewerRescheduleUrl
+    ? `\nInterviewers — need to reschedule? ${args.interviewerRescheduleUrl}\n`
+    : "";
 
   return {
     subject: `Your ${args.jobTitle} interview — ${when}`,
@@ -128,6 +147,83 @@ export function buildCandidateInviteEmail(args: CandidateInviteEmailArgs): {
       `With: ${panel}\n\n` +
       `A calendar invite (.ics) is attached — please accept it to add the interview to your calendar.\n` +
       rescheduleNote +
+      panelRescheduleNote +
+      `\nLooking forward to speaking with you!\n\n` +
+      `${args.recruiterName}`,
+  };
+}
+
+export interface CandidateReschedulePendingEmailArgs {
+  candidateName: string | null;
+  jobTitle: string;
+  roundName: string;
+  timezone: string;
+  durationMinutes: number;
+  recruiterName: string;
+  interviewerNames: string[];
+  previousSlotStart?: string;
+  proposedSlots: { start: string; end: string }[];
+}
+
+/** Candidate notice while the panel confirms newly proposed times after a reschedule. */
+export function buildCandidateReschedulePendingEmail(args: CandidateReschedulePendingEmailArgs): {
+  subject: string;
+  body: string;
+} {
+  const name = args.candidateName?.split(" ")[0] ?? "there";
+  const panel = args.interviewerNames.join(", ");
+  const slots = args.proposedSlots;
+  const multi = slots.length > 1;
+  const timesBlock = multi
+    ? slots.map((s, i) => `  ${i + 1}. ${formatSlotLocal(s.start, args.timezone)}`).join("\n")
+    : formatSlotLocal(slots[0]!.start, args.timezone);
+  const previousLine = args.previousSlotStart
+    ? `Previous time: ${formatSlotLocal(args.previousSlotStart, args.timezone)}\n\n`
+    : "";
+
+  return {
+    subject: `Your ${args.jobTitle} interview is being rescheduled`,
+    body:
+      `Hi ${name},\n\n` +
+      `Your ${args.roundName} for the ${args.jobTitle} role is being rescheduled.\n\n` +
+      previousLine +
+      (multi
+        ? `We're confirming one of these new times with your interview panel:\n${timesBlock}\n`
+        : `We're confirming this new time with your interview panel:\n${timesBlock}\n`) +
+      `\nDuration: ${args.durationMinutes} minutes\n` +
+      `Panel: ${panel}\n\n` +
+      `You'll receive a confirmation email with an updated calendar invite once the panel approves.\n\n` +
+      `${args.recruiterName}`,
+  };
+}
+
+export interface CandidateRescheduledEmailArgs extends CandidateInviteEmailArgs {
+  previousSlotStart: string;
+}
+
+/** Candidate confirmation after a reschedule is approved by the panel. */
+export function buildCandidateRescheduledEmail(args: CandidateRescheduledEmailArgs): {
+  subject: string;
+  body: string;
+} {
+  const when = formatSlotLocal(args.slotStart, args.timezone);
+  const previousWhen = formatSlotLocal(args.previousSlotStart, args.timezone);
+  const name = args.candidateName?.split(" ")[0] ?? "there";
+  const panel = args.interviewerNames.join(", ");
+  const rescheduleNote = args.rescheduleUrl
+    ? `\nNeed to reschedule again? Use this link (valid up to 24h before the interview):\n${args.rescheduleUrl}\n`
+    : "";
+
+  return {
+    subject: `Updated: your ${args.jobTitle} interview — ${when}`,
+    body:
+      `Hi ${name},\n\n` +
+      `Your ${args.durationMinutes}-minute ${args.roundName} for the ${args.jobTitle} role has been rescheduled.\n\n` +
+      `Previous time: ${previousWhen}\n` +
+      `New time: ${when} (${args.timezone})\n` +
+      `With: ${panel}\n\n` +
+      `An updated calendar invite (.ics) is attached — please accept it to update your calendar.\n` +
+      rescheduleNote +
       `\nLooking forward to speaking with you!\n\n` +
       `${args.recruiterName}`,
   };
@@ -137,4 +233,10 @@ export function buildCandidateInviteEmail(args: CandidateInviteEmailArgs): {
 export function buildCandidateRescheduleUrl(token: string, origin?: string): string {
   const base = origin ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   return `${base}/schedule/reschedule/${token}`;
+}
+
+/** Panel link to release a confirmed slot and propose new times. */
+export function buildInterviewerRescheduleUrl(responseToken: string, origin?: string): string {
+  const base = origin ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  return `${base}/api/slack/actions?token=${responseToken}&action=cancel`;
 }
