@@ -5,6 +5,11 @@ import { log } from "@/lib/logger";
 import type { QueueJob } from "@/lib/queue";
 import { listInterviewers } from "@/lib/interviewers";
 import { createScorecardsForRound, buildScorecardUrl } from "@/lib/scorecard";
+import {
+  buildScorecardRequestBlocks,
+  lookupSlackUserByEmail,
+  postSlackMessage,
+} from "@/lib/slack";
 
 export async function handleSendScorecardRequest(job: QueueJob): Promise<void> {
   const sb = supabaseServer();
@@ -77,5 +82,52 @@ export async function handleSendScorecardRequest(job: QueueJob): Promise<void> {
       { matchId: match.id, interviewerId: iv.id, messageId: sent.messageId },
       "send_scorecard_request: sent",
     );
+
+    try {
+      let slackUserId = iv.slack_user_id;
+      if (!slackUserId) {
+        slackUserId = await lookupSlackUserByEmail(iv.email);
+        if (slackUserId) {
+          await sb
+            .from("interviewers")
+            .update({
+              slack_user_id: slackUserId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", iv.id);
+        }
+      }
+
+      if (!slackUserId) {
+        log.info(
+          { matchId: match.id, interviewerId: iv.id },
+          "send_scorecard_request: no Slack user found",
+        );
+        continue;
+      }
+
+      const slackRes = await postSlackMessage({
+        channel: slackUserId,
+        text: `Scorecard needed: ${candidateName} · ${jobRow.title as string} · ${roundName}`,
+        blocks: buildScorecardRequestBlocks({
+          candidateName,
+          jobTitle: jobRow.title as string,
+          roundName,
+          scorecardUrl: url,
+          responseToken: card.response_token,
+        }),
+      });
+      if (!slackRes.ok) {
+        log.warn(
+          { matchId: match.id, interviewerId: iv.id, error: slackRes.error },
+          "send_scorecard_request: Slack send failed",
+        );
+      }
+    } catch (err) {
+      log.warn(
+        { matchId: match.id, interviewerId: iv.id, err: String(err) },
+        "send_scorecard_request: Slack notification failed",
+      );
+    }
   }
 }

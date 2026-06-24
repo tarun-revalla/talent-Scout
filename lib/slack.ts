@@ -1,6 +1,6 @@
 import { env } from "./env";
 
-interface SlackBlock {
+export interface SlackBlock {
   type: string;
   [key: string]: unknown;
 }
@@ -230,6 +230,66 @@ export function buildResolvedBlocks(args: {
     });
   }
   return blocks;
+}
+
+/** Build Block Kit blocks for an interviewer scorecard request. */
+export function buildScorecardRequestBlocks(args: {
+  candidateName: string;
+  jobTitle: string;
+  roundName: string;
+  scorecardUrl: string;
+  responseToken: string;
+}): SlackBlock[] {
+  const recommendationButtons = [
+    { text: "Strong yes", style: "primary", actionId: "scorecard_strong_yes" },
+    { text: "Yes", actionId: "scorecard_yes" },
+    { text: "No", actionId: "scorecard_no" },
+    { text: "Strong no", style: "danger", actionId: "scorecard_strong_no" },
+  ];
+
+  return [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text:
+          `*Scorecard needed:* ${args.candidateName} · ${args.jobTitle}\n` +
+          `*Round:* ${args.roundName}\n` +
+          "Use a quick recommendation below, or open the full scorecard to add ratings and notes.",
+      },
+    },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Open full scorecard" },
+          url: args.scorecardUrl,
+          value: args.responseToken,
+          action_id: "open_scorecard",
+        },
+      ],
+    },
+    {
+      type: "actions",
+      elements: recommendationButtons.map((button) => ({
+        type: "button",
+        text: { type: "plain_text", text: button.text },
+        style: button.style,
+        value: args.responseToken,
+        action_id: button.actionId,
+      })),
+    },
+    {
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: "Quick recommendations submit immediately. Use the full scorecard when the decision needs more context.",
+        },
+      ],
+    },
+  ];
 }
 
 /**

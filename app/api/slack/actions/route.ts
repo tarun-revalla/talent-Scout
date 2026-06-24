@@ -10,8 +10,20 @@ import { formatSlotLocal } from "@/lib/scheduling-email";
 import { log } from "@/lib/logger";
 import { enqueue } from "@/lib/queue";
 import { supabaseServer } from "@/lib/db";
+import {
+  RECOMMENDATION_LABEL,
+  submitScorecard,
+  type ScorecardRecommendation,
+} from "@/lib/scorecard";
 
 export const runtime = "nodejs";
+
+const SCORECARD_ACTIONS: Record<string, ScorecardRecommendation> = {
+  scorecard_strong_yes: "strong_yes",
+  scorecard_yes: "yes",
+  scorecard_no: "no",
+  scorecard_strong_no: "strong_no",
+};
 
 /**
  * Process an interviewer's accept/reject of a scheduling proposal. Shared by
@@ -177,6 +189,51 @@ export async function POST(req: NextRequest) {
 
   const clicked = payload.actions[0];
   const token = clicked?.value ?? "";
+  const scorecardRecommendation = clicked?.action_id
+    ? SCORECARD_ACTIONS[clicked.action_id]
+    : undefined;
+  if (token && scorecardRecommendation) {
+    try {
+      await submitScorecard(token, {
+        recommendation: scorecardRecommendation,
+        notes: "Submitted from Slack quick action.",
+      });
+      if (payload.response_url) {
+        await fetch(payload.response_url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(15_000),
+          body: JSON.stringify({
+            replace_original: false,
+            response_type: "ephemeral",
+            text: `Scorecard recorded: ${RECOMMENDATION_LABEL[scorecardRecommendation]}. Open the full scorecard link if you want to add ratings or notes.`,
+          }),
+        });
+      }
+    } catch (err) {
+      log.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "slack/actions POST: error submitting scorecard action",
+      );
+      if (payload.response_url) {
+        await fetch(payload.response_url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(15_000),
+          body: JSON.stringify({
+            replace_original: false,
+            response_type: "ephemeral",
+            text:
+              err instanceof Error
+                ? err.message
+                : "Could not submit this scorecard. Please open the full scorecard link.",
+          }),
+        });
+      }
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   const action: "accept" | "reject" | "cancel" | null =
     clicked?.action_id === "approve_interview"
       ? "accept"
@@ -204,6 +261,7 @@ export async function POST(req: NextRequest) {
       await fetch(payload.response_url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
           replace_original: false,
           response_type: "ephemeral",
