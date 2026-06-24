@@ -8,16 +8,6 @@ function optional(name: string, fallback: string): string {
   return process.env[name] ?? fallback;
 }
 
-function optionalPort(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-  const port = Number(raw);
-  if (!Number.isInteger(port) || ![465, 587].includes(port)) {
-    throw new Error(`${name} must be either 465 or 587`);
-  }
-  return port;
-}
-
 export const env = {
   openaiApiKey: () => required("OPENAI_API_KEY"),
   supabaseUrl: () => required("SUPABASE_URL"),
@@ -37,10 +27,9 @@ export const env = {
   gmailUser: () => required("GMAIL_USER"),
   gmailAppPassword: () => required("GMAIL_APP_PASSWORD"),
   gmailImapHost: () => optional("GMAIL_IMAP_HOST", "imap.gmail.com"),
-  gmailSmtpHost: () => optional("GMAIL_SMTP_HOST", "smtp.gmail.com"),
-  // 587 = STARTTLS submission, which is the safer default on Railway.
-  // 465 remains supported when explicitly configured.
-  gmailSmtpPort: () => optionalPort("GMAIL_SMTP_PORT", 587),
+  gmailClientId: () => required("GMAIL_CLIENT_ID"),
+  gmailClientSecret: () => required("GMAIL_CLIENT_SECRET"),
+  gmailRefreshToken: () => required("GMAIL_REFRESH_TOKEN"),
   workerPollIntervalMs: () =>
     parseInt(optional("WORKER_POLL_INTERVAL_MS", "30000"), 10),
   workerSharedSecret: () => required("WORKER_SHARED_SECRET"),

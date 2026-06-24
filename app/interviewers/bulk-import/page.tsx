@@ -1,15 +1,14 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { Suspense, useCallback, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { BulkInterviewerImport } from "@/components/BulkInterviewerImport";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
 
-export default function BulkImportPage() {
+function BulkImportContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId") ?? "";
@@ -64,5 +63,13 @@ export default function BulkImportPage() {
         )}
       </div>
     </PageShell>
+  );
+}
+
+export default function BulkImportPage() {
+  return (
+    <Suspense fallback={null}>
+      <BulkImportContent />
+    </Suspense>
   );
 }

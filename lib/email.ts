@@ -1,28 +1,6 @@
-import nodemailer, { type Transporter } from "nodemailer";
+import nodemailer, { type SendMailOptions } from "nodemailer";
 import { env } from "./env";
 import { wrapEmailHtml, type EmailHtmlOptions } from "./email-html";
-
-let _transport: Transporter | null = null;
-
-export function transport(): Transporter {
-  if (!_transport) {
-    const port = env.gmailSmtpPort();
-    _transport = nodemailer.createTransport({
-      host: env.gmailSmtpHost(),
-      port,
-      secure: port === 465, // 465 = implicit TLS; 587 = STARTTLS
-      requireTLS: port !== 465,
-      auth: { user: env.gmailUser(), pass: env.gmailAppPassword() },
-      // Fail fast on a stalled connection (Railway egress can be slow/blocked)
-      // so the queue's exponential-backoff retry kicks in instead of hanging.
-      dnsTimeout: 10_000,
-      connectionTimeout: 15_000,
-      greetingTimeout: 10_000,
-      socketTimeout: 20_000,
-    });
-  }
-  return _transport;
-}
 
 export interface SendArgs {
   to: string;
@@ -45,13 +23,59 @@ export interface SendResult {
   acceptedAt: string;
 }
 
+async function sendViaGmailApi(message: SendMailOptions): Promise<SendResult> {
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.gmailClientId(),
+      client_secret: env.gmailClientSecret(),
+      refresh_token: env.gmailRefreshToken(),
+      grant_type: "refresh_token",
+    }),
+  });
+  if (!tokenRes.ok) {
+    throw new Error(`gmail api token refresh failed: ${tokenRes.status} ${await tokenRes.text()}`);
+  }
+  const tokenJson = (await tokenRes.json()) as { access_token?: string };
+  if (!tokenJson.access_token) throw new Error("gmail api token refresh failed: missing access_token");
+
+  const compiler = nodemailer.createTransport({ streamTransport: true, buffer: true });
+  const compiled = await compiler.sendMail(message);
+  const rawMessage = Buffer.isBuffer(compiled.message)
+    ? compiled.message
+    : Buffer.from(String(compiled.message));
+  const raw = rawMessage.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+
+  const sendRes = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(env.gmailUser())}/messages/send`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenJson.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ raw }),
+    },
+  );
+  if (!sendRes.ok) {
+    throw new Error(`gmail api send failed: ${sendRes.status} ${await sendRes.text()}`);
+  }
+
+  return {
+    messageId: compiled.messageId ?? "",
+    envelopeMessageId: null,
+    acceptedAt: new Date().toISOString(),
+  };
+}
+
 export async function sendEmail(args: SendArgs): Promise<SendResult> {
   const headers: Record<string, string> = {};
   if (args.inReplyTo) headers["In-Reply-To"] = args.inReplyTo;
   if (args.references && args.references.length) {
     headers["References"] = args.references.join(" ");
   }
-  const info = await transport().sendMail({
+  const message = {
     from: env.gmailUser(),
     to: args.to,
     subject: args.subject,
@@ -63,10 +87,7 @@ export async function sendEmail(args: SendArgs): Promise<SendResult> {
       content: a.content,
       contentType: a.contentType ?? "application/octet-stream",
     })),
-  });
-  return {
-    messageId: info.messageId ?? "",
-    envelopeMessageId: info.envelope?.from ?? null,
-    acceptedAt: new Date().toISOString(),
   };
+
+  return sendViaGmailApi(message);
 }

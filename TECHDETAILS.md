@@ -19,7 +19,7 @@ Browser
 **Why two processes?** The web process is serverless (Vercel) and can't hold open IMAP connections or run long polling loops. The worker is a persistent Node.js process that:
 
 - Polls the `outreach_queue` table every N seconds
-- Sends outbound emails via Gmail SMTP
+- Sends outbound emails via the Gmail API
 - Polls Gmail IMAP for inbound replies
 - Calls OpenAI to analyze replies, score candidates, and generate follow-up questions
 - Writes results back to Postgres (which triggers Supabase Realtime → browser updates)
@@ -40,7 +40,7 @@ The two processes share only Postgres. The worker never calls the Next.js API.
 | LLM (fast) | `gpt-4o-mini` via OpenAI API |
 | Embeddings | `text-embedding-3-small` via OpenAI API |
 | Structured outputs | OpenAI + Zod schemas via `zodResponseFormat` |
-| Email outbound | Nodemailer (Gmail SMTP) |
+| Email outbound | Gmail API over HTTPS |
 | Email inbound | imapflow + mailparser (Gmail IMAP) |
 | CSV parsing | Papa.parse |
 | Worker runtime | Node.js via `tsx` (TypeScript execution) |
@@ -66,11 +66,15 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...
 NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 
-# Gmail — use a dedicated account + App Password
+# Gmail — use a dedicated account
 GMAIL_USER=your.account@gmail.com
+# Used for inbound IMAP reply polling.
 GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 GMAIL_IMAP_HOST=imap.gmail.com
-GMAIL_SMTP_HOST=smtp.gmail.com
+# Used for outbound Gmail API sending.
+GMAIL_CLIENT_ID=...
+GMAIL_CLIENT_SECRET=...
+GMAIL_REFRESH_TOKEN=...
 
 # Worker
 WORKER_POLL_INTERVAL_MS=30000          # how often the worker polls (ms)
@@ -264,7 +268,7 @@ The worker's `inboundPoll.ts` is the core loop:
 Every WORKER_POLL_INTERVAL_MS:
   1. Pick pending actions from outreach_queue
   2. For each action:
-     a. send_initial   → write personalised email, send via SMTP
+     a. send_initial   → write personalised email, send via Gmail API
      b. send_followup  → send follow-up with targeted questions
      c. poll_inbound   → check Gmail IMAP for replies
          → analyzeReply() (GPT-4o) extracts:

@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  const jobId = params.id;
+  const { id: jobId } = await params;
   if (!jobId) {
     return NextResponse.json({ error: "Job ID required" }, { status: 400 });
   }

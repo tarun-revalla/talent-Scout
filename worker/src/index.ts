@@ -1,10 +1,9 @@
 import dns from "node:dns";
 import { loadEnvLocal } from "@/lib/load-env";
 
-// Railway (and most container hosts) resolve smtp/imap.gmail.com to an IPv6
-// address first, but their egress to that IPv6 hangs until the socket times
-// out ("Connection timeout") — which is why it works locally but not on
-// Railway. Prefer IPv4 A-records so the connection actually establishes.
+// Railway (and most container hosts) may resolve imap.gmail.com to an IPv6
+// address first, but their egress to that IPv6 can hang until the socket times
+// out. Prefer IPv4 A-records so inbound polling establishes reliably.
 dns.setDefaultResultOrder("ipv4first");
 
 loadEnvLocal();

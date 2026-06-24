@@ -3,9 +3,9 @@ import { getConsensusForRound } from "@/lib/scorecard";
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  const matchId = params.id;
+  const { id: matchId } = await params;
   if (!matchId) {
     return NextResponse.json({ error: "Match ID required" }, { status: 400 });
   }
