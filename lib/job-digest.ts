@@ -12,10 +12,11 @@ export interface DigestSnapshotJob {
   awaiting_reply: number;
   candidate_questions_pending: number;
   interview_in_progress: number;
+  pending_scorecards: number;
   queue_pending: number;
 }
 
-async function buildSnapshot(): Promise<DigestSnapshotJob[]> {
+export async function buildDigestSnapshot(): Promise<DigestSnapshotJob[]> {
   const sb = supabaseServer();
   const { data: jobs } = await sb
     .from("jobs")
@@ -48,6 +49,14 @@ async function buildSnapshot(): Promise<DigestSnapshotJob[]> {
         .order("received_at", { ascending: false })
     : { data: [] };
 
+  const { data: scorecards } = matchIds.length
+    ? await sb
+        .from("interviewer_scorecards")
+        .select("match_id, status")
+        .eq("status", "pending")
+        .in("match_id", matchIds)
+    : { data: [] };
+
   const latestAnalysisByMatch = new Map<string, { candidate_questions?: string[]; decision?: string }>();
   for (const c of inbound ?? []) {
     const mid = c.match_id as string;
@@ -61,6 +70,18 @@ async function buildSnapshot(): Promise<DigestSnapshotJob[]> {
     const jid = (m as { job_id?: string })?.job_id;
     if (!jid) continue;
     queueByJob.set(jid, (queueByJob.get(jid) ?? 0) + 1);
+  }
+
+  const matchJobById = new Map<string, string>();
+  for (const m of matches ?? []) {
+    matchJobById.set(m.id as string, m.job_id as string);
+  }
+
+  const pendingScorecardsByJob = new Map<string, number>();
+  for (const scorecard of scorecards ?? []) {
+    const jid = matchJobById.get(scorecard.match_id as string);
+    if (!jid) continue;
+    pendingScorecardsByJob.set(jid, (pendingScorecardsByJob.get(jid) ?? 0) + 1);
   }
 
   return jobs.map((job) => {
@@ -106,20 +127,87 @@ async function buildSnapshot(): Promise<DigestSnapshotJob[]> {
       awaiting_reply: awaitingReply,
       candidate_questions_pending: questionsPending,
       interview_in_progress: inInterview,
+      pending_scorecards: pendingScorecardsByJob.get(jid) ?? 0,
       queue_pending: queueByJob.get(jid) ?? 0,
     };
   });
 }
 
-export async function generateJobDigest(): Promise<JobDigest & { generated_at: string }> {
-  const snapshot = await buildSnapshot();
+export function buildDeterministicJobDigest(snapshot: DigestSnapshotJob[]): JobDigest {
   if (snapshot.length === 0) {
     return {
       headline: "No open jobs",
       summary: "Create a job to start matching and outreach.",
       items: [],
-      generated_at: new Date().toISOString(),
     };
+  }
+
+  const items: JobDigest["items"] = [];
+  for (const job of snapshot) {
+    const addItem = (priority: "high" | "medium" | "low", action: string) => {
+      if (items.length < 8) {
+        items.push({
+          job_id: job.job_id,
+          job_title: job.title,
+          priority,
+          action,
+        });
+      }
+    };
+
+    if (job.candidate_questions_pending > 0) {
+      addItem(
+        "high",
+        `Answer ${job.candidate_questions_pending} candidate question${job.candidate_questions_pending === 1 ? "" : "s"}.`,
+      );
+    }
+    if (job.pending_scorecards > 0) {
+      addItem(
+        "high",
+        `Collect ${job.pending_scorecards} pending scorecard${job.pending_scorecards === 1 ? "" : "s"} from interviewers.`,
+      );
+    }
+    if (job.high_match_uncontacted > 0) {
+      addItem(
+        "medium",
+        `Engage ${job.high_match_uncontacted} high-match candidate${job.high_match_uncontacted === 1 ? "" : "s"} who have not been contacted.`,
+      );
+    }
+    if (job.awaiting_reply > 0) {
+      addItem(
+        "medium",
+        `Review ${job.awaiting_reply} candidate thread${job.awaiting_reply === 1 ? "" : "s"} awaiting recruiter action.`,
+      );
+    }
+    if (job.queue_pending > 0) {
+      addItem(
+        "low",
+        `Monitor ${job.queue_pending} queued automation task${job.queue_pending === 1 ? "" : "s"}.`,
+      );
+    }
+  }
+
+  const urgent = items.filter((item) => item.priority === "high").length;
+  const totalJobs = snapshot.length;
+  return {
+    headline:
+      urgent > 0
+        ? `${urgent} urgent recruiting action${urgent === 1 ? "" : "s"}`
+        : "Recruiting pipeline is moving",
+    summary:
+      items.length > 0
+        ? `${totalJobs} open job${totalJobs === 1 ? "" : "s"} reviewed. Focus first on candidate questions, missing feedback, and high-match candidates waiting for outreach.`
+        : `${totalJobs} open job${totalJobs === 1 ? "" : "s"} reviewed with no urgent recruiter action detected.`,
+    items,
+  };
+}
+
+export async function generateJobDigest(
+  snapshot?: DigestSnapshotJob[],
+): Promise<JobDigest & { generated_at: string }> {
+  snapshot ??= await buildDigestSnapshot();
+  if (snapshot.length === 0) {
+    return { ...buildDeterministicJobDigest(snapshot), generated_at: new Date().toISOString() };
   }
 
   const digest = await composeJobDigest({
@@ -131,5 +219,5 @@ export async function generateJobDigest(): Promise<JobDigest & { generated_at: s
 }
 
 export async function getDigestSnapshot(): Promise<DigestSnapshotJob[]> {
-  return buildSnapshot();
+  return buildDigestSnapshot();
 }
